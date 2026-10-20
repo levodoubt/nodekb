@@ -87,8 +87,8 @@ webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 
 `python -m kb webui`：纯只读本地 HTTP server（stdlib http.server，零依赖；单 HTML 内联 CSS/JS 零 CDN）。仅绑 127.0.0.1，默认端口 8666。
 
-- **关系星图**（暗色）：节点 = 知识块（仅 name），边 = parent 层级 + `[[TID]]` ref 引用；力导向布局（网格斥力 + 弹簧，力/速度/坐标钳制防 500+ 节点发散）。
-- **类型着色 + chip 筛选**：type→固定色板（hash 兜底）；点击 chip 隐藏/显示该类。
+- **关系星图**（暗色）：节点 = 方形文本框（深色底 + 类型色描边，显示 `name` 上限 50 字符），边 = parent 层级 + `[[TID]]` ref 引用；力导向布局（网格斥力 + 弹簧，力/速度/坐标钳制防 500+ 节点发散）。
+- **左侧栏**：类型 chip 筛选 + 层级树（点击定位居中）+ 视图调节滑杆（排斥力/线明度实时生效）。
 - **点击节点 → 右侧详情面板**（markdown 渲染，引用展开；整支/仅节点/元信息）；滚轮缩放、平移、拖节点、悬停高亮、Esc 关闭。
 - 无任何编辑入口；改文档 = 直接改 `.nodekb` 下的 md。
 
@@ -97,7 +97,7 @@ webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 | 路由 | 参数 | 返回 |
 |---|---|---|
 | `/api/list` | – | `{"libraries": {name: 技能目录}}` |
-| `/api/graph` | `kb` | `{"nodes": [{tid,title,type,kind,nchar}], "edges": [{s,t,r: p|r}]}`（r=p 父链 / r=ref 转译引用） |
+| `/api/graph` | `kb` | `{"nodes": [{tid,title,name,type,kind,nchar}], "edges": [{s,t,r: p|r}]}`（r=p 父链 / r=ref 转译引用） |
 | `/api/tree` | `kb` | `{"tree": 递归树, "total": N}`（每节点 tid/title/type/source/children） |
 | `/api/toc` | `kb, tid` | `{"tid", "lines": [目录行]}`（tid 缺省 root） |
 | `/api/read` | `kb, tid, node` | `{"tid", "title", "type", "source", "text"}`（渲染文本，node=1 仅单节点） |

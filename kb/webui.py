@@ -51,16 +51,32 @@ select,input{height:30px;padding:0 8px;border:1px solid var(--border);border-rad
 select:focus,input:focus{border-color:var(--accent)}
 #search{flex:1;min-width:120px;max-width:380px}
 #count{color:var(--muted);font-size:12px;white-space:nowrap}
-#filters{position:fixed;top:47px;left:0;right:0;z-index:19;display:flex;gap:6px;flex-wrap:wrap;
-  padding:6px 14px;background:rgba(15,17,21,.88);backdrop-filter:blur(6px);
-  border-bottom:1px solid var(--border)}
-.chip{display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 9px;border-radius:13px;
+#filters{display:flex;gap:6px;flex-wrap:wrap;padding:8px 12px;overflow:auto;max-height:40%}
+.chip{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border-radius:12px;
   border:1px solid var(--border);background:#1a2029;color:var(--muted);font-size:12px;cursor:pointer}
 .chip .dot{width:8px;height:8px;border-radius:50%}
 .chip b{font-weight:500;opacity:.7}
 .chip.on{color:var(--fg);border-width:1px;background:#1d2531}
-canvas#graph{position:fixed;top:0;left:0;right:0;bottom:0;z-index:1;cursor:grab;touch-action:none}
-.hint{position:fixed;left:14px;bottom:12px;z-index:5;color:var(--muted);font-size:12px}
+#leftbar{position:fixed;top:47px;left:0;bottom:0;width:268px;z-index:14;
+  background:rgba(15,17,21,.92);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;overflow:hidden}
+.lsec{display:flex;flex-direction:column;border-bottom:1px solid var(--border)}
+.lsec.grow{flex:1;min-height:0}
+.lsec-h{font-size:12px;color:var(--muted);padding:6px 12px 2px;letter-spacing:.5px}
+#tree{flex:1;overflow:auto;padding:4px 8px 12px;user-select:none}
+.trow{display:flex;align-items:center;gap:4px;padding:2px 5px;border-radius:5px;cursor:pointer;font-size:12px}
+.trow:hover{background:#1d2531}
+.trow.active{background:#1d2531;box-shadow:inset 2px 0 0 var(--accent)}
+.tcaret{width:12px;color:var(--muted);flex:none;text-align:center;font-size:10px}
+.tlabel{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tchildren{margin-left:10px}
+.tchildren.hidden{display:none}
+.ctl{padding:4px 12px 10px;display:flex;flex-direction:column;gap:7px}
+.ctl label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.ctl span{width:38px;text-align:right;color:var(--fg);font-variant-numeric:tabular-nums}
+.ctl input[type=range]{flex:1;accent-color:var(--accent);height:4px}
+canvas#graph{position:fixed;top:0;left:268px;right:0;bottom:0;z-index:1;cursor:grab;touch-action:none}
+.hint{position:fixed;left:278px;bottom:12px;z-index:5;color:var(--muted);font-size:12px}
 #panel{position:fixed;top:0;right:0;bottom:0;z-index:15;width:min(560px,84vw);
   background:var(--panel);border-left:1px solid var(--border);
   transform:translateX(100%);transition:transform .18s ease;overflow:auto;padding:16px 22px 60px}
@@ -107,15 +123,34 @@ canvas#graph{position:fixed;top:0;left:0;right:0;bottom:0;z-index:1;cursor:grab;
   <input id="search" placeholder="全文检索…（Enter 搜索）">
   <span id="count"></span>
 </header>
-<div id="filters"></div>
+<aside id="leftbar">
+  <div class="lsec">
+    <div class="lsec-h">类型筛选</div>
+    <div id="filters"></div>
+  </div>
+  <div class="lsec grow">
+    <div class="lsec-h">层级</div>
+    <div id="tree"><div class="empty">加载中…</div></div>
+  </div>
+  <div class="lsec">
+    <div class="lsec-h">视图调节</div>
+    <div class="ctl">
+      <label>排斥力 <input id="sl-rep" type="range" min="30" max="300" value="100"><span id="rep-val">100%</span></label>
+      <label>线明度 <input id="sl-edge" type="range" min="0" max="300" value="100"><span id="edge-val">100%</span></label>
+    </div>
+  </div>
+</aside>
 <canvas id="graph"></canvas>
-<div class="hint">滚轮缩放 · 拖空白平移 · 拖节点调整 · 点击节点查看详情</div>
+<div class="hint">滚轮缩放 · 拖空白平移 · 拖节点调整 · 点击节点/树项查看详情 · Esc 关闭</div>
 <aside id="panel"></aside>
 <script>
 'use strict';
 const $ = s => document.querySelector(s);
 let KB = '', GRAPH = null, byId = new Map(), TYPES = new Set(), COUNTS = {};
-let HIDDEN = new Set(), SEL = null, HOVER = null, NODE_MODE = false;
+let HIDDEN = new Set(), SEL = null, HOVER = null;
+const SETTINGS = {rep: 1, edge: 1};                       /* 视图调节：斥力倍数 / 线明度倍数 */
+const VW = () => cv.clientWidth || window.innerWidth;
+const VH = () => cv.clientHeight || window.innerHeight;
 
 async function api(path, params){
   const u = new URL(path, location.origin);
@@ -264,10 +299,10 @@ function typeColor(t){
   for (const c of String(t)) h = (h * 31 + c.charCodeAt(0)) % 360;
   return 'hsl(' + h + ', 60%, 62%)';
 }
-function nodeBox(n){  /* 方形文本框：尺寸由名称文本决定（缓存） */
+function nodeBox(n){  /* 方形文本框：尺寸由 name 文本决定（缓存，上限 50 字符） */
   if (!n._box){
     ctx.font = '12px sans-serif';
-    const label = trunc(n.title || n.tid, 18);
+    const label = trunc(n.name || n.tid, 50);
     const w = Math.max(24, Math.ceil(ctx.measureText(label).width) + 16);
     n._box = {w, h: 26};
   }
@@ -276,15 +311,14 @@ function nodeBox(n){  /* 方形文本框：尺寸由名称文本决定（缓存�
 function nodeRadius(n){ return Math.max(nodeBox(n).w, nodeBox(n).h) / 2; }
 function resize(){
   const dpr = window.devicePixelRatio || 1;
-  const w = window.innerWidth, h = window.innerHeight;
+  const w = VW(), h = VH();
   cv.width = w * dpr; cv.height = h * dpr;
-  cv.style.width = w + 'px'; cv.style.height = h + 'px';
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 window.addEventListener('resize', () => { resize(); draw(); });
 
 function draw(){
-  const W = window.innerWidth, H = window.innerHeight;
+  const W = VW(), H = VH();
   ctx.clearRect(0, 0, W, H);
   const sx = x => x * VIEW.s + VIEW.x, sy = y => y * VIEW.s + VIEW.y;
   const hoverSet = HOVER ? new Set([HOVER]) : null;
@@ -293,13 +327,16 @@ function draw(){
     for (const e of GRAPH.edges)
       if (e.s === HOVER) hoverSet.add(e.t); else if (e.t === HOVER) hoverSet.add(e.s);
   }
+  const eA = SETTINGS.edge;                    /* 线明度倍数 */
   /* 边：ref 高亮，parent 弱化；悬停时只画相邻边 */
   for (const e of GRAPH.edges){
     const a = byId.get(e.s), b = byId.get(e.t);
     if (!a || !b || a.hidden || b.hidden) continue;
     if (hoverSet && !hoverSet.has(e.s) && !hoverSet.has(e.t)) continue;
     ctx.beginPath(); ctx.moveTo(sx(a.x), sy(a.y)); ctx.lineTo(sx(b.x), sy(b.y));
-    ctx.strokeStyle = e.r === 'p' ? 'rgba(255,255,255,0.06)' : 'rgba(91,155,255,0.26)';
+    ctx.strokeStyle = e.r === 'p'
+      ? 'rgba(255,255,255,' + (0.06 * eA).toFixed(3) + ')'
+      : 'rgba(91,155,255,' + (0.26 * eA).toFixed(3) + ')';
     ctx.lineWidth = 1; ctx.stroke();
   }
   /* 节点：方形文本框，深色底 + 类型色描边，名称在框内 */
@@ -324,12 +361,12 @@ function draw(){
     ctx.lineWidth = n.tid === SEL ? 2.5 : 1.4;
     ctx.stroke();
     ctx.globalAlpha = 1;
-    if (box.w * VIEW.s > 18){                    /* 框内显示名称 */
+    if (box.w * VIEW.s > 18){                    /* 框内显示 name（上限 50 字符） */
       ctx.fillStyle = n.tid === SEL ? '#fff' : '#d7dde6';
       ctx.font = '12px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(trunc(n.title || n.tid, 18), x, y + 0.5);
+      ctx.fillText(trunc(n.name || n.tid, 50), x, y + 0.5);
     }
   }
 }
@@ -342,7 +379,7 @@ function runSim(){
   const byId2 = new Map(ns.map(n => [n.tid, n]));
   for (const n of ns) if (n.x == null){ n.x = (Math.random() - 0.5) * 900; n.y = (Math.random() - 0.5) * 600; }
   const edges = GRAPH.edges.filter(e => byId2.has(e.s) && byId2.has(e.t));
-  const CELL = 180, REP = 4200, K = 0.9, GRAV = 0.02;
+  const CELL = 180, REP = 4200 * SETTINGS.rep, K = 0.9, GRAV = 0.02;
   const SPR_P = 120, SPR_R = 200, FMAX = 90, VMAX = 30, BOUND = 8000;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   let alpha = 1;
@@ -409,7 +446,7 @@ function fitView(){
     if (n.x - r < minX) minX = n.x - r; if (n.x + r > maxX) maxX = n.x + r;
     if (n.y - r < minY) minY = n.y - r; if (n.y + r > maxY) maxY = n.y + r;
   }
-  const W = window.innerWidth, H = window.innerHeight, pad = 60;
+  const W = VW(), H = VH(), pad = 60;
   const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
   const s = Math.min((W - pad * 2) / bw, (H - pad * 2) / bh, 1.6);
   VIEW.s = Math.max(0.25, s);
@@ -420,8 +457,8 @@ function fitView(){
 function centerView(tid){
   const n = byId.get(tid);
   if (n && n.x != null){
-    VIEW.x = window.innerWidth / 2 - n.x * VIEW.s;
-    VIEW.y = window.innerHeight / 2 - n.y * VIEW.s;
+    VIEW.x = VW() / 2 - n.x * VIEW.s;
+    VIEW.y = VH() / 2 - n.y * VIEW.s;
     draw();
   }
 }
@@ -512,6 +549,63 @@ function applyVis(){
   runSim();
 }
 
+/* ---------------- 视图调节滑杆 ---------------- */
+function wireControls(){
+  $('#sl-rep').addEventListener('input', e => {
+    SETTINGS.rep = e.target.value / 100;
+    $('#rep-val').textContent = e.target.value + '%';
+    runSim();
+  });
+  $('#sl-edge').addEventListener('input', e => {
+    SETTINGS.edge = e.target.value / 100;
+    $('#edge-val').textContent = e.target.value + '%';
+    draw();
+  });
+}
+
+/* ---------------- 层级树（左侧定位） ---------------- */
+function renderTree(node, parent){
+  for (const k of (node.children || [])){
+    const isDir = (k.children || []).length > 0;
+    const row = document.createElement('div');
+    row.className = 'trow';
+    const caret = document.createElement('span');
+    caret.className = 'tcaret';
+    caret.textContent = isDir ? '▸' : '';
+    const label = document.createElement('span');
+    label.className = 'tlabel';
+    label.textContent = k.title || k.tid;
+    label.title = k.tid;
+    row.append(caret, label);
+    const go = () => { treeActive(row); openNode(k.tid); centerView(k.tid); };
+    if (isDir){
+      const wrap = document.createElement('div');
+      wrap.className = 'tchildren hidden';
+      let opened = false;
+      caret.addEventListener('click', e => {
+        e.stopPropagation();
+        opened = !opened;
+        caret.textContent = opened ? '▾' : '▸';
+        wrap.classList.toggle('hidden', !opened);
+        if (opened && !wrap.dataset.loaded){ wrap.dataset.loaded = '1'; renderTree(k, wrap); }
+      });
+      row.addEventListener('click', go);
+      parent.append(row, wrap);
+    } else {
+      row.addEventListener('click', go);
+      parent.append(row);
+    }
+  }
+}
+function treeActive(row){
+  document.querySelectorAll('#tree .trow').forEach(r => r.classList.remove('active'));
+  row.classList.add('active');
+}
+async function loadTree(){
+  const d = await api('/api/tree', {kb: KB});
+  renderTree(d.tree, $('#tree'));
+}
+
 /* ---------------- 详情面板 / 检索 ---------------- */
 function openPanel(html){
   $('#panel').innerHTML = html;
@@ -590,6 +684,7 @@ async function loadLib(){
   $('#count').textContent = g.nodes.length + ' 节点 · ' + g.edges.length + ' 边';
   HIDDEN = new Set(); SEL = null;
   buildFilters();
+  loadTree();
   applyVis();
 }
 async function init(){
@@ -602,6 +697,7 @@ async function init(){
   const sel = $('#lib-select');
   sel.innerHTML = names.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('');
   sel.addEventListener('change', () => { KB = sel.value; loadLib(); });
+  wireControls();
   KB = names[0];
   resize();
   loadLib();
@@ -647,8 +743,8 @@ def _graph(nodes: dict) -> dict:
     for tid, n in nodes.items():
         if tid == "root":
             continue
-        g_nodes.append({"tid": tid, "title": n["title"] or tid, "type": n["type"],
-                        "kind": n.get("kind", "node"), "nchar": len(n["content"])})
+        g_nodes.append({"tid": tid, "title": n["title"] or tid, "name": n["title"] or tid,
+                        "type": n["type"], "kind": n.get("kind", "node"), "nchar": len(n["content"])})
     edges: list[dict] = []
     seen: set = set()
     for tid, n in nodes.items():
