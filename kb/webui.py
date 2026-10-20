@@ -51,7 +51,8 @@ select,input{height:30px;padding:0 8px;border:1px solid var(--border);border-rad
 select:focus,input:focus{border-color:var(--accent)}
 #search{flex:1;min-width:120px;max-width:380px}
 #count{color:var(--muted);font-size:12px;white-space:nowrap}
-#filters{display:flex;gap:6px;flex-wrap:wrap;padding:8px 12px;overflow:auto;max-height:40%}
+#filters{display:flex;gap:6px;flex-wrap:wrap;padding:8px 12px;overflow:auto;
+  max-height:180px;flex:0 1 auto}   /* 固定 px：百分比在父高度 auto 时会被忽略，导致 chip 撑满侧栏 */
 .chip{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 8px;border-radius:12px;
   border:1px solid var(--border);background:#1a2029;color:var(--muted);font-size:12px;cursor:pointer}
 .chip .dot{width:8px;height:8px;border-radius:50%}
@@ -60,8 +61,8 @@ select:focus,input:focus{border-color:var(--accent)}
 #leftbar{position:fixed;top:47px;left:0;bottom:0;width:268px;z-index:14;
   background:rgba(15,17,21,.92);border-right:1px solid var(--border);
   display:flex;flex-direction:column;overflow:hidden}
-.lsec{display:flex;flex-direction:column;border-bottom:1px solid var(--border)}
-.lsec.grow{flex:1;min-height:0}
+.lsec{display:flex;flex-direction:column;border-bottom:1px solid var(--border);flex:0 0 auto;overflow:hidden}
+.lsec.grow{flex:1 1 auto;min-height:120px}
 .lsec-h{font-size:12px;color:var(--muted);padding:6px 12px 2px;letter-spacing:.5px}
 #tree{flex:1;overflow:auto;padding:4px 8px 12px;user-select:none}
 .trow{display:flex;align-items:center;gap:4px;padding:2px 5px;border-radius:5px;cursor:pointer;font-size:12px}
@@ -86,7 +87,7 @@ canvas#graph{position:fixed;top:47px;left:268px;z-index:1;cursor:grab;touch-acti
   canvas#graph{left:200px;width:calc(100vw - 200px)}
   .hint{left:210px}
 }
-#panel{position:fixed;top:0;right:0;bottom:0;z-index:15;width:min(560px,84vw);
+#panel{position:fixed;top:47px;right:0;bottom:0;z-index:15;width:min(560px,84vw);
   background:var(--panel);border-left:1px solid var(--border);
   transform:translateX(100%);transition:transform .18s ease;overflow:auto;padding:16px 22px 60px}
 #panel.open{transform:none}
@@ -155,7 +156,7 @@ canvas#graph{position:fixed;top:47px;left:268px;z-index:1;cursor:grab;touch-acti
   </div>
 </aside>
 <canvas id="graph"></canvas>
-<div class="hint">滚轮缩放 · 拖空白平移 · 点击节点/树项查看详情 · 点节点右侧 ＋N 展开/折叠 · Esc 关闭</div>
+<div class="hint">滚轮缩放 · 拖空白平移 · 点击节点/树项查看详情 · 双击节点折叠/展开子分支 · Esc 关闭</div>
 <aside id="panel"></aside>
 <script>
 'use strict';
@@ -317,7 +318,7 @@ function nodeBox(n){  /* 方形文本框：尺寸由 name 文本决定（缓存�
   if (!n._box){
     ctx.font = '12px sans-serif';
     const label = trunc(n.name || n.tid, 50);
-    const w = Math.max(24, Math.ceil(ctx.measureText(label).width) + 16 + (n._nkids ? 26 : 0));
+    const w = Math.max(24, Math.ceil(ctx.measureText(label).width) + 16);
     n._box = {w, h: 26};
   }
   return n._box;
@@ -402,14 +403,18 @@ function draw(){
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(trunc(n.name || n.tid, 50), x, y);
-      if (n._nkids){                             /* 折叠徽标：点击展开/收起子节点 */
-        ctx.textAlign = 'right';
-        ctx.font = Math.max(8, fs - 1) + 'px sans-serif';
-        ctx.fillStyle = typeColor(n.type);
-        ctx.globalAlpha = 0.95;
-        ctx.fillText((n.collapsed ? '＋' : '－') + n._nkids, x + hw - 6, y);
-        ctx.globalAlpha = 1;
-      }
+    }
+    /* 框外左上角小字：类型 + 子分支数（折叠时用 ＋N 提示） */
+    const fs2 = Math.max(7, 9 * VIEW.s);
+    if (fs2 >= 5){
+      const label = n.type + (n._nkids ? (n.collapsed ? ' ＋' + n._nkids : ' · ' + n._nkids) : '');
+      ctx.font = fs2 + 'px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillStyle = typeColor(n.type);
+      ctx.globalAlpha = 0.75;
+      ctx.fillText(label, x - hw, y - hh - 2);
+      ctx.globalAlpha = 1;
     }
   }
 }
@@ -437,8 +442,8 @@ function buildTreeIndex(){
   roots.forEach(r => walkAll(r, 0));
   GRAPH.nodes.forEach(n => { if (!guard.has(n.tid)) walkAll(n, 0); });
   for (const n of GRAPH.nodes){
-    /* 初始全部折叠（只显示顶层），避免 500+ 节点一次性纵向铺开上万像素 */
-    if (n.collapsed === undefined) n.collapsed = (kidsAll.get(n.tid) || []).length > 0;
+    /* 默认全部展开；折叠状态在会话内保留（切库时节点对象全新，会重置为展开） */
+    if (n.collapsed === undefined) n.collapsed = false;
     n._nkids = (kidsAll.get(n.tid) || []).length;
   }
   return {parentOf, kidsAll, roots, depthAll};
@@ -585,16 +590,14 @@ let drag = null;
 cv.addEventListener('pointerdown', e => {
   cv.setPointerCapture(e.pointerId);
   const p = pos(e), n = nodeAt(p.x, p.y);
-  if (n && n._nkids){                            /* 点右侧徽标 → 折叠/展开 */
-    const right = (n.x + nodeBox(n).w / 2) * VIEW.s + VIEW.x;
-    if (p.x > right - 28){
-      n.collapsed = !n.collapsed;
-      n._box = null;                             /* 徽标宽度变化，重算框宽 */
-      layoutTree();
-      return;
-    }
-  }
   drag = {px: p.x, py: p.y, ox: VIEW.x, oy: VIEW.y, tid: n ? n.tid : null, moved: false};
+});
+cv.addEventListener('dblclick', e => {           /* 双击节点：折叠/展开子分支 */
+  const p = pos(e), n = nodeAt(p.x, p.y);
+  if (n && n._nkids){
+    n.collapsed = !n.collapsed;
+    layoutTree();
+  }
 });
 cv.addEventListener('pointermove', e => {
   const p = pos(e);
@@ -726,7 +729,7 @@ function closePanel(){
 }
 async function openNode(tid, mode){
   SEL = tid;
-  centerView(tid);
+  draw();                                      /* 只高亮，不移动画布（点击不再重置视图） */
   try{
     const data = await api('/api/read', {kb: KB, tid, node: mode === 'node' ? 1 : 0});
     let text = data.text || '', cut = '';
