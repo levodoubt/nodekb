@@ -50,6 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--kb", default=None)
     p.add_argument("--lib", default=None)
 
+    p = sub.add_parser("webui", help="启动只读本地 WebUI（人类可读界面，浏览器打开）")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8666)
+
     return parser
 
 
@@ -76,6 +80,10 @@ def main(argv: list[str] | None = None) -> int:
             for name, info in sorted(reg.items()):
                 print(f"{name}\t{info.get('path')}\t库根={info.get('path')}\\.nodekb")
             return 0
+        if args.command == "webui":
+            from . import webui
+
+            return webui.main(host=args.host, port=args.port)
         nodes = _load(args)
         if args.command == "read":
             text, code = commands.cmd_read(nodes, args.target, node=args.node,

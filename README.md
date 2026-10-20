@@ -34,6 +34,7 @@ python -m kb diag [--kb N | --lib …]
 python -m kb dump --out <dir> [--kb N | --lib …]
 python -m kb register <name> <技能目录>    # 自动创建 .nodekb 库根
 python -m kb list
+python -m kb webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 ```
 
 - `read`：默认整支渲染投影（引用展开）；`--toc` 目录视图；`--raw` 元信息（含 source 行号）。
@@ -58,6 +59,18 @@ python -m kb list
 
 四工具：`kb_list` / `kb_read` / `kb_search` / `kb_diag`（无 edit——写文档 = 原生 write/edit）。Agent 典型流程：`kb_list` → `kb_search(kb=库名, query)` → `kb_read(kb=库名, target=tid)`。
 
+## WebUI（人类只读界面）
+
+`python -m kb webui` 启动纯只读本地 server（stdlib http.server，零依赖，单 HTML 内联 CSS/JS 零 CDN）。浏览器打开 http://127.0.0.1:8666/：
+
+- **库选择**：顶部下拉（读 `kb_registry.json`，仅列出存在 `.nodekb` 的库）
+- **左栏项目树**：全库导航（文件夹/文件/显式节点递归，懒展开），类型过滤可只看 doc/todo/git/… 
+- **全文检索**：复用 search（中文 2-gram），结果点击直达节点
+- **阅读视图**：`[[TID]]` 引用已展开；「仅此节点 / 元信息」按钮；来源行号展示
+- **只读**：无任何编辑入口——改文档 = 直接改 `.nodekb` 下的 md
+
+只读接口（JSON）：`/api/list` `/api/tree?kb=` `/api/toc?kb=&tid=` `/api/read?kb=&tid=&node=` `/api/raw?kb=&tid=` `/api/search?kb=&q=&type=&limit=`。
+
 ## 文档
 
 - [SPEC.md](SPEC.md)：完整接口设计（v0.3，.nodekb 递归）
@@ -69,11 +82,12 @@ python -m kb list
 nodekb/
 ├── README.md / SPEC.md
 ├── kb/
-│   ├── __main__.py     CLI
+│   ├── __main__.py     CLI（read/search/diag/…/webui）
 │   ├── mdlib.py        解析层（.nodekb 递归 → 节点树）
 │   ├── render.py       渲染（引用展开 / toc / raw）
 │   ├── commands.py     read / search / diag / register / list / dump
 │   ├── mcp_server.py   MCP server（stdio，零依赖）
+│   ├── webui.py        只读本地 WebUI（http.server 零依赖）
 │   └── run_mcp.py      独立启动入口（不依赖 PYTHONPATH/cwd）
 └── tests/test_core.py
 ```

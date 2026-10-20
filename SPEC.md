@@ -65,6 +65,7 @@ diag [--json] [--kb N | --lib …]
 dump --out <dir> [--kb N | --lib …]
 register <name> <技能目录>      # 自动创建 .nodekb 库根
 list [--json]
+webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 ```
 
 - read：默认整支渲染投影（[[TID]] 展开）；`--toc` 目录视图；`--raw` 元信息（含 source 行号）。
@@ -78,13 +79,31 @@ list [--json]
 - 注册表：`nodekb/kb_registry.json`（name → 技能目录），`kb register` 维护。
 - Agent 典型流程：`kb_list` → `kb_search(kb=库名, query)` → `kb_read(kb=库名, target=tid)`；**写 = 改 `.nodekb` 下 md**。
 
-## 6. 存储位置
+## 6. WebUI（人类只读界面）
+
+`python -m kb webui`：纯只读本地 HTTP server（stdlib http.server，零依赖；单 HTML 内联 CSS/JS 零 CDN）。仅绑 127.0.0.1，默认端口 8666。
+
+- 库选择（仅列出存在 `.nodekb` 的注册库）→ 左栏项目树（全库递归，懒展开 + 类型过滤）→ 全文检索 → 阅读视图（`[[TID]]` 已展开）。
+- 无任何编辑入口；改文档 = 直接改 `.nodekb` 下的 md。
+
+只读接口（JSON，错误统一 `{"error": …}`）：
+
+| 路由 | 参数 | 返回 |
+|---|---|---|
+| `/api/list` | – | `{"libraries": {name: 技能目录}}` |
+| `/api/tree` | `kb` | `{"tree": 递归树, "total": N}`（每节点 tid/title/type/source/children） |
+| `/api/toc` | `kb, tid` | `{"tid", "lines": [目录行]}`（tid 缺省 root） |
+| `/api/read` | `kb, tid, node` | `{"tid", "title", "type", "source", "text"}`（渲染文本，node=1 仅单节点） |
+| `/api/raw` | `kb, tid` | `{"tid", "type", "title", "parent_tid", "sort", "source", "content"}` |
+| `/api/search` | `kb, q, type, limit` | `{"count", "hits": [{tid, type, title, source, snippet}]}` |
+
+## 7. 存储位置
 
 - 库 = 技能文件夹下 `.nodekb/`，md 递归组织（任意目录结构）。
 - 技能目录原 doc/ 等保留为备份（迁移时复制，不删除）。
 - 版本历史由编辑工具链承担，NodeKB 不持有。
 
-## 7. 验证清单（回归门禁）
+## 8. 验证清单（回归门禁）
 
 - [x] `.nodekb` 递归解析：文件夹/文件/隐式段/显式 `<node>` 四级。
 - [x] 缺省规则：type=文件夹名；parent=文件内第一个 `<node>` name，否则文件节点。
@@ -94,3 +113,4 @@ list [--json]
 - [x] read 整支 / --toc / --raw；search 中文多词；dump 导出。
 - [x] diag 三库实测（comfyui 508 / minecraft 193 / filmmeasure 154 节点）exit 0。
 - [x] MCP 四工具交互正常；重复 TID 报错。
+- [x] WebUI：/api/list·tree·toc·read·raw·search 全接口实测通过（minecraft 库，339 节点），引用展开正常。
