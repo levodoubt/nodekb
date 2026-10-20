@@ -60,8 +60,8 @@ select:focus,input:focus{border-color:var(--accent)}
 #leftbar{position:fixed;top:47px;left:0;bottom:0;width:268px;z-index:14;
   background:rgba(15,17,21,.92);border-right:1px solid var(--border);
   display:flex;flex-direction:column;overflow:hidden}
-.lsec{display:flex;flex-direction:column;border-bottom:1px solid var(--border)}
-.lsec.grow{flex:1;min-height:0}
+.lsec{display:flex;flex-direction:column;border-bottom:1px solid var(--border);flex-shrink:0}
+.lsec.grow{flex:1 1 0;min-height:0}
 .lsec-h{font-size:12px;color:var(--muted);padding:6px 12px 2px;letter-spacing:.5px}
 #tree{flex:1;overflow:auto;padding:4px 8px 12px;user-select:none}
 .trow{display:flex;align-items:center;gap:4px;padding:2px 5px;border-radius:5px;cursor:pointer;font-size:12px}
@@ -151,9 +151,9 @@ let childrenMap = new Map(), roots = [], HIDDEN = new Set();
 let COLLAPSED = new Set(), EXPANDED = new Set();     /* 折叠 / 强制展开 */
 let SEL = null, HOVER = null;
 const SETTINGS = {col: 1, edge: 1};
-const COL_W = 210, ROW_H = 44, MAX_DEPTH = 2;        /* 世界单位；默认展开深度 */
-const VW = () => cv.clientWidth || window.innerWidth;
-const VH = () => cv.clientHeight || window.innerHeight;
+const COL_W = 210, ROW_H = 38, MAX_DEPTH = 2;        /* 世界单位；默认展开深度 */
+const VW = () => { const r = cv.getBoundingClientRect(); return r.width || window.innerWidth - 268; };
+const VH = () => { const r = cv.getBoundingClientRect(); return r.height || window.innerHeight; };
 
 async function api(path, params){
   const u = new URL(path, location.origin);
@@ -351,17 +351,18 @@ function layout(){
   const W = VW(), H = VH(), pad = 70;
   const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
   const s = Math.min((W - pad * 2) / bw, (H - pad * 2) / bh, 1.2);
-  VIEW.s = Math.max(0.15, s);
+  VIEW.s = Math.max(0.25, s);
   VIEW.x = W / 2 - (minX + maxX) / 2 * VIEW.s;
   VIEW.y = H / 2 - (minY + maxY) / 2 * VIEW.s;
 }
 function resize(){
   const dpr = window.devicePixelRatio || 1;
   const rect = cv.getBoundingClientRect();
-  const w = Math.max(1, rect.width), h = Math.max(1, rect.height);
+  /* 兜底：布局未就绪时 rect 可能为 0，取视口减左栏，绝不让画布塌缩 */
+  const w = Math.max(1, rect.width || (window.innerWidth - 268));
+  const h = Math.max(1, rect.height || window.innerHeight);
   cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
-  /* 关键：显式固定 CSS 显示尺寸 = w×h，否则 canvas 的 CSS 宽度退化由 width 属性（w×dpr）决定，
-     导致绘制/命中基准（clientWidth）与显示尺寸错位 → 光标点击位置映射错误 */
+  /* 显式固定 CSS 显示尺寸 = w×h，与绘制/命中基准（clientWidth）保持一致 */
   cv.style.width = w + 'px'; cv.style.height = h + 'px';
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
@@ -701,6 +702,7 @@ async function loadLib(){
   resize();          /* 布局前刷新基准，保证 VIEW/命中与显示一致 */
   layout();
   draw();
+  setTimeout(() => { if (GRAPH){ resize(); layout(); draw(); } }, 400);  /* 兜底：首帧后再适配一次 */
 }
 async function init(){
   const libs = await api('/api/list');
@@ -714,8 +716,7 @@ async function init(){
   sel.addEventListener('change', () => { KB = sel.value; loadLib(); });
   wireControls();
   KB = names[0];
-  resize();
-  loadLib();
+  requestAnimationFrame(() => { resize(); loadLib(); });   /* 等首次布局完成再取画布尺寸，避免塌缩 */
 }
 init().catch(e => { document.body.innerHTML = '<div class="empty" style="padding:80px">加载失败：' + esc(e.message) + '</div>'; });
 </script>
@@ -798,6 +799,7 @@ class _Handler(BaseHTTPRequestHandler):
         if status != 204:
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")  # 防浏览器缓存旧页面（曾多次误看旧版本）
         self.end_headers()
         if status != 204:
             self.wfile.write(data)
