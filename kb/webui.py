@@ -77,6 +77,12 @@ main{flex:1;overflow:auto;padding:18px 26px 60px}
 .doc li li{margin:0}
 .doc hr{border:none;border-top:1px solid var(--border);margin:16px 0}
 .doc a{color:var(--accent)}
+.doc table{border-collapse:collapse;margin:8px 0;font-size:13px;display:block;max-width:100%;overflow-x:auto}
+.doc th,.doc td{border:1px solid var(--border);padding:4px 10px;text-align:left;vertical-align:top}
+.doc th{background:#f6f8fa;font-weight:600}
+.doc del{color:var(--muted)}
+.doc img{max-width:100%;border-radius:6px;margin:4px 0}
+.doc input[type=checkbox]{vertical-align:-2px;margin-right:6px}
 .meta{color:var(--muted);font-size:12px;margin-bottom:14px}
 .btns{display:inline-flex;gap:6px;margin-left:8px}
 .btns button{font-size:12px;border:1px solid var(--border);background:#fff;border-radius:5px;
@@ -130,20 +136,25 @@ function esc(s){
     c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-/* ---------------- markdown 渲染 ---------------- */
+/* ---------------- markdown 渲染（零依赖） ---------------- */
 function inline(s){
   s = esc(s);
   s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
-  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  s = s.replace(/\*([^*\s][^*]*?)\*/g, '<em>$1</em>');
+  s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, u) =>
+    /^https?:\/\//i.test(u) ? '<img src="' + u + '" alt="' + alt + '" loading="lazy">' : m);
   s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, t, u) =>
-    /^[a-z]+:/i.test(u) ? '<a href="' + u + '" target="_blank" rel="noopener">' + t + '</a>' : t);
+    /^https?:\/\//i.test(u) ? '<a href="' + u + '" target="_blank" rel="noopener">' + t + '</a>' : t);
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  s = s.replace(/\*([^*\s][^*]*?)\*/g, '<em>$1</em>');
+  s = s.replace(/(^|\s)(https?:\/\/[^\s<]+)/g,
+    '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
   return s;
 }
 function listHtml(items){
   const roots = [], stack = [];
   for (const it of items){
-    while (stack.length && stack[stack.length - 1].depth >= it.depth) stack.pop();
+    while (stack.length && stack[stack.length - 1].it.depth >= it.depth) stack.pop();
     const node = {it, children: []};
     if (!stack.length) roots.push(node); else stack[stack.length - 1].children.push(node);
     stack.push(node);
@@ -152,50 +163,91 @@ function listHtml(items){
 }
 function renderList(nodes){
   let h = '';
-  for (const n of nodes) h += '<li>' + inline(n.it.text) + (n.children.length ? renderList(n.children) : '') + '</li>';
+  for (const n of nodes){
+    const tm = n.it.text.match(/^\[([ xX])\]\s*(.*)$/);
+    const body = tm
+      ? '<input type="checkbox" disabled' + (tm[1] !== ' ' ? ' checked' : '') + '> ' + inline(tm[2])
+      : inline(n.it.text);
+    h += '<li>' + body + (n.children.length ? renderList(n.children) : '') + '</li>';
+  }
   const tag = nodes[0].it.ol ? 'ol' : 'ul';
   return '<' + tag + '>' + h + '</' + tag + '>';
+}
+function isItemLine(l){ return /^(\s*)([-*+]|\d+[.)])\s+/.test(l); }
+function indentOf(s){ return s.replace(/\t/g, '    ').length; }
+function splitRow(l){
+  l = l.trim();
+  if (l.charAt(0) === '|') l = l.slice(1);
+  if (l.charAt(l.length - 1) === '|') l = l.slice(0, -1);
+  return l.split('|').map(c => c.trim());
 }
 function mdToHtml(md){
   const lines = String(md || '').split('\n');
   const out = [];
   let i = 0;
   while (i < lines.length){
-    const t = lines[i].trim();
+    const line = lines[i], t = line.trim();
     if (!t){ i++; continue; }
-    if (t.startsWith('```')){                 /* 代码块 */
+    if (t.startsWith('```')){                    /* 代码块 */
       const buf = []; i++;
       while (i < lines.length && !lines[i].trim().startsWith('```')){ buf.push(lines[i]); i++; }
       i++;
       out.push('<pre><code>' + esc(buf.join('\n')) + '</code></pre>');
       continue;
     }
-    if (/^#{1,6}\s/.test(lines[i])){          /* 标题 */
-      const lvl = lines[i].match(/^#+/)[0].length;
-      out.push('<h' + lvl + '>' + inline(lines[i].replace(/^#+\s*/, '')) + '</h' + lvl + '>');
+    const h = t.match(/^(#{1,6})\s+(.*)$/);       /* 标题 */
+    if (h){
+      out.push('<h' + h[1].length + '>' + inline(h[2]) + '</h' + h[1].length + '>');
       i++; continue;
     }
-    if (/^\s*([-*]|\d+[.)])\s+/.test(lines[i])){  /* 列表 */
+    if (/^(-{3,}|\*{3,})\s*$/.test(t)){ out.push('<hr>'); i++; continue; }  /* 分隔线 */
+    if (t.includes('|') && i + 1 < lines.length &&                       /* 表格 */
+        /^\|?[\s:-]+\|[\s:|:-]*\|?$/.test(lines[i + 1].trim())){
+      const rows = [];
+      while (i < lines.length && lines[i].trim() !== '' && lines[i].includes('|')){
+        rows.push(splitRow(lines[i])); i++;
+      }
+      const head = rows[0], body = rows.slice(2);
+      out.push('<table><thead><tr>' + head.map(c => '<th>' + inline(c) + '</th>').join('') +
+               '</tr></thead><tbody>' +
+               body.map(r => '<tr>' + r.map(c => '<td>' + inline(c) + '</td>').join('') + '</tr>').join('') +
+               '</tbody></table>');
+      continue;
+    }
+    if (/^>\s?/.test(line)){                     /* 引用（内部递归渲染） */
+      const buf = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])){ buf.push(lines[i].replace(/^>\s?/, '')); i++; }
+      out.push('<blockquote>' + mdToHtml(buf.join('\n')) + '</blockquote>');
+      continue;
+    }
+    if (isItemLine(line)){                       /* 列表（嵌套 + 续行 + 任务清单） */
       const items = [];
+      let rootIndent = -1;
       while (i < lines.length){
-        const m = lines[i].match(/^(\s*)([-*]|\d+[.)])\s+(.*)$/);
-        if (!m) break;
-        items.push({depth: Math.floor(m[1].length / 2), ol: /^\d/.test(m[2]), text: m[3]});
+        const l = lines[i];
+        if (!l.trim() || !isItemLine(l)) break;
+        const m = l.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
+        const ind = indentOf(m[1]);
+        if (rootIndent < 0) rootIndent = ind;
+        if (ind < rootIndent) break;
+        items.push({depth: Math.floor((ind - rootIndent) / 2), ol: /^\d/.test(m[2]), text: m[3]});
         i++;
+        while (i < lines.length){                /* 续行：缩进且非列表行的内容并入上一条 */
+          const c = lines[i];
+          if (!c.trim() || isItemLine(c) || !/^\s/.test(c)) break;
+          items[items.length - 1].text += ' ' + c.trim();
+          i++;
+        }
       }
       out.push(listHtml(items));
       continue;
     }
-    if (/^>\s?/.test(lines[i])){              /* 引用 */
-      const buf = [];
-      while (i < lines.length && /^>\s?/.test(lines[i])){ buf.push(lines[i].replace(/^>\s?/, '')); i++; }
-      out.push('<blockquote>' + inline(buf.join('\n')) + '</blockquote>');
-      continue;
-    }
-    if (/^-{3,}$/.test(t)){ out.push('<hr>'); i++; continue; }
-    const para = [];                          /* 段落 */
+    const para = [];                             /* 段落 */
     while (i < lines.length && lines[i].trim() &&
-           !/^(#{1,6}\s|```|[-*]\s+|\d+[.)]\s+|>)/.test(lines[i])){
+           !/^(#{1,6}\s|```|>)/.test(lines[i]) && !isItemLine(lines[i]) &&
+           !/^(-{3,}|\*{3,})\s*$/.test(lines[i].trim()) &&
+           !(lines[i].includes('|') && i + 1 < lines.length &&
+             /^\|?[\s:-]+\|[\s:|:-]*\|?$/.test(lines[i + 1].trim()))){
       para.push(lines[i]); i++;
     }
     out.push('<p>' + para.map(inline).join('<br>') + '</p>');

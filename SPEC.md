@@ -113,4 +113,4 @@ webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 - [x] read 整支 / --toc / --raw；search 中文多词；dump 导出。
 - [x] diag 三库实测（comfyui 508 / minecraft 193 / filmmeasure 154 节点）exit 0。
 - [x] MCP 四工具交互正常；重复 TID 报错。
-- [x] WebUI：/api/list·tree·toc·read·raw·search 全接口实测通过（minecraft 库，339 节点），引用展开正常。
+- [x] WebUI：/api/list·tree·toc·read·raw·search 全接口实测通过（minecraft 库，339 节点），引用展开正常；markdown 渲染（表格/任务清单/嵌套列表/引用递归）实测通过。
