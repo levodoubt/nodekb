@@ -264,7 +264,16 @@ function typeColor(t){
   for (const c of String(t)) h = (h * 31 + c.charCodeAt(0)) % 360;
   return 'hsl(' + h + ', 60%, 62%)';
 }
-function nodeRadius(n){ return 5 + Math.min(18, Math.sqrt(n.nchar) * 0.55); }
+function nodeBox(n){  /* 方形文本框：尺寸由名称文本决定（缓存） */
+  if (!n._box){
+    ctx.font = '12px sans-serif';
+    const label = trunc(n.title || n.tid, 18);
+    const w = Math.max(24, Math.ceil(ctx.measureText(label).width) + 16);
+    n._box = {w, h: 26};
+  }
+  return n._box;
+}
+function nodeRadius(n){ return Math.max(nodeBox(n).w, nodeBox(n).h) / 2; }
 function resize(){
   const dpr = window.devicePixelRatio || 1;
   const w = window.innerWidth, h = window.innerHeight;
@@ -293,23 +302,34 @@ function draw(){
     ctx.strokeStyle = e.r === 'p' ? 'rgba(255,255,255,0.06)' : 'rgba(91,155,255,0.26)';
     ctx.lineWidth = 1; ctx.stroke();
   }
-  /* 节点 */
+  /* 节点：方形文本框，深色底 + 类型色描边，名称在框内 */
   for (const n of GRAPH.nodes){
     if (n.hidden) continue;
-    const x = sx(n.x), y = sy(n.y), r = Math.max(2, nodeRadius(n) * VIEW.s);
-    if (x < -r || x > W + r || y < -r || y > H + r) continue;
-    if (HOVER){
-      const adj = hoverSet.has(n.tid);
-      ctx.globalAlpha = adj ? 1 : 0.22;
-    }
-    ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832);
-    ctx.fillStyle = typeColor(n.type); ctx.fill();
-    if (n.tid === SEL){ ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
-    else if (HOVER === n.tid){ ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 1.5; ctx.stroke(); }
+    const box = nodeBox(n);
+    const x = sx(n.x), y = sy(n.y);
+    const hw = box.w * VIEW.s / 2, hh = box.h * VIEW.s / 2;
+    if (x + hw < 0 || x - hw > W || y + hh < 0 || y - hh > H) continue;
+    ctx.globalAlpha = HOVER ? (hoverSet.has(n.tid) ? 1 : 0.25) : 1;
+    const rad = Math.min(4, hw, hh);
+    ctx.beginPath();
+    ctx.moveTo(x - hw + rad, y - hh);
+    ctx.arcTo(x + hw, y - hh, x + hw, y + hh, rad);
+    ctx.arcTo(x + hw, y + hh, x - hw, y + hh, rad);
+    ctx.arcTo(x - hw, y + hh, x - hw, y - hh, rad);
+    ctx.arcTo(x - hw, y - hh, x + hw, y - hh, rad);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(22,26,34,0.85)';
+    ctx.fill();
+    ctx.strokeStyle = n.tid === SEL ? '#ffffff' : (HOVER === n.tid ? '#ffd166' : typeColor(n.type));
+    ctx.lineWidth = n.tid === SEL ? 2.5 : 1.4;
+    ctx.stroke();
     ctx.globalAlpha = 1;
-    if (VIEW.s > 0.5){
-      ctx.fillStyle = '#d7dde6'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(trunc(n.title, 14), x, y + r + 12);
+    if (box.w * VIEW.s > 18){                    /* 框内显示名称 */
+      ctx.fillStyle = n.tid === SEL ? '#fff' : '#d7dde6';
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(trunc(n.title || n.tid, 18), x, y + 0.5);
     }
   }
 }
@@ -322,8 +342,8 @@ function runSim(){
   const byId2 = new Map(ns.map(n => [n.tid, n]));
   for (const n of ns) if (n.x == null){ n.x = (Math.random() - 0.5) * 900; n.y = (Math.random() - 0.5) * 600; }
   const edges = GRAPH.edges.filter(e => byId2.has(e.s) && byId2.has(e.t));
-  const CELL = 150, REP = 2200, K = 0.9, GRAV = 0.02;
-  const SPR_P = 95, SPR_R = 170, FMAX = 60, VMAX = 25, BOUND = 4000;
+  const CELL = 180, REP = 4200, K = 0.9, GRAV = 0.02;
+  const SPR_P = 120, SPR_R = 200, FMAX = 90, VMAX = 30, BOUND = 8000;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   let alpha = 1;
   function tick(){
@@ -333,7 +353,7 @@ function runSim(){
       if (!grid.has(key)) grid.set(key, []);
       grid.get(key).push(n);
     }
-    for (const n of ns){                        /* 斥力 */
+    for (const n of ns){                        /* 斥力 + 盒子碰撞推出 */
       let fx = 0, fy = 0;
       const bx = Math.floor(n.x / CELL), by = Math.floor(n.y / CELL);
       for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++){
@@ -345,7 +365,9 @@ function runSim(){
           let d2 = ddx * ddx + ddy * ddy;
           if (d2 < 1) d2 = 1;
           if (d2 > CELL * CELL * 2.5) continue;
-          const d = Math.sqrt(d2), f = REP / d2;
+          const d = Math.sqrt(d2);
+          const rsum = nodeRadius(n) + nodeRadius(m);
+          const f = d < rsum ? 500 / d : REP / d2;   /* 重叠时强推，否则常规斥力 */
           fx += ddx / d * f; fy += ddy / d * f;
         }
       }
@@ -406,9 +428,10 @@ function centerView(tid){
 function nodeAt(px, py){
   for (const n of GRAPH.nodes){
     if (n.hidden || n.x == null) continue;
+    const box = nodeBox(n);
     const x = n.x * VIEW.s + VIEW.x, y = n.y * VIEW.s + VIEW.y;
-    const r = nodeRadius(n) * VIEW.s + 4;
-    if ((px - x) * (px - x) + (py - y) * (py - y) <= r * r) return n;
+    const hw = box.w * VIEW.s / 2 + 2, hh = box.h * VIEW.s / 2 + 2;
+    if (Math.abs(px - x) <= hw && Math.abs(py - y) <= hh) return n;
   }
   return null;
 }
