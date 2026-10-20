@@ -78,8 +78,14 @@ select:focus,input:focus{border-color:var(--accent)}
 .mbtn{font-size:12px;border:1px solid var(--border);background:#1a2029;color:var(--muted);
   border-radius:5px;padding:2px 10px;cursor:pointer}
 .mbtn:hover{border-color:var(--accent);color:var(--fg)}
-canvas#graph{position:fixed;top:0;left:268px;right:0;bottom:0;z-index:1;cursor:grab;touch-action:none}
+canvas#graph{position:fixed;top:47px;left:268px;z-index:1;cursor:grab;touch-action:none;
+  width:calc(100vw - 268px);height:calc(100vh - 47px)}
 .hint{position:fixed;left:278px;bottom:12px;z-index:5;color:var(--muted);font-size:12px}
+@media (max-width:900px){
+  #leftbar{width:200px}
+  canvas#graph{left:200px;width:calc(100vw - 200px)}
+  .hint{left:210px}
+}
 #panel{position:fixed;top:0;right:0;bottom:0;z-index:15;width:min(560px,84vw);
   background:var(--panel);border-left:1px solid var(--border);
   transform:translateX(100%);transition:transform .18s ease;overflow:auto;padding:16px 22px 60px}
@@ -157,8 +163,8 @@ const $ = s => document.querySelector(s);
 let KB = '', GRAPH = null, byId = new Map(), TYPES = new Set(), COUNTS = {};
 let HIDDEN = new Set(), SEL = null, HOVER = null;
 const SETTINGS = {hgap: 1, vgap: 1, edge: 1};              /* 视图调节：横向/纵向间距、线明度倍数 */
-const VW = () => cv.clientWidth || window.innerWidth;
-const VH = () => cv.clientHeight || window.innerHeight;
+const VW = () => cv.clientWidth || Math.max(180, window.innerWidth - 268);
+const VH = () => cv.clientHeight || Math.max(180, window.innerHeight - 47);
 
 async function api(path, params){
   const u = new URL(path, location.origin);
@@ -318,9 +324,21 @@ function nodeBox(n){  /* 方形文本框：尺寸由 name 文本决定（缓存�
 }
 function resize(){
   const dpr = window.devicePixelRatio || 1;
-  const w = VW(), h = VH();
-  cv.width = w * dpr; cv.height = h * dpr;
+  /* 显式写 px 尺寸：canvas 是替换元素，仅靠 top/right/bottom 会退回属性尺寸（曾导致高度只有 298px） */
+  const lb = document.querySelector('#leftbar');
+  const left = lb ? Math.round(lb.getBoundingClientRect().width) : 268;
+  const top = 47;
+  const w = Math.max(180, window.innerWidth - left);
+  const h = Math.max(180, window.innerHeight - top);
+  cv.style.left = left + 'px';
+  cv.style.top = top + 'px';
+  cv.style.width = w + 'px';
+  cv.style.height = h + 'px';
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const hint = document.querySelector('.hint');
+  if (hint){ hint.style.left = (left + 10) + 'px'; hint.style.bottom = '12px'; }
 }
 window.addEventListener('resize', () => { resize(); if (GRAPH) fitView(); });
 
@@ -419,7 +437,8 @@ function buildTreeIndex(){
   roots.forEach(r => walkAll(r, 0));
   GRAPH.nodes.forEach(n => { if (!guard.has(n.tid)) walkAll(n, 0); });
   for (const n of GRAPH.nodes){
-    if (n.collapsed === undefined) n.collapsed = (depthAll.get(n.tid) || 0) >= 1 && (kidsAll.get(n.tid) || []).length > 0;
+    /* 初始全部折叠（只显示顶层），避免 500+ 节点一次性纵向铺开上万像素 */
+    if (n.collapsed === undefined) n.collapsed = (kidsAll.get(n.tid) || []).length > 0;
     n._nkids = (kidsAll.get(n.tid) || []).length;
   }
   return {parentOf, kidsAll, roots, depthAll};
@@ -438,12 +457,21 @@ function layoutTree(){
     for (const c of kidsAll.get(n.tid) || []) visit(c);
   };
   roots.forEach(visit);
-  GRAPH.nodes.forEach(n => { if (!visible.has(n.tid)) visit_orphan(n); });
-  function visit_orphan(n){                       /* 环/孤立节点兜底 */
+
+  /* 只兜底「从根不可达」的节点（环/孤立）；被折叠的子节点本身可达，不能再加回来 */
+  const reach = new Set();
+  const mark = n => {
+    if (reach.has(n.tid)) return;
+    reach.add(n.tid);
+    for (const c of kidsAll.get(n.tid) || []) mark(c);
+  };
+  roots.forEach(mark);
+  const visitOrphan = n => {
     if (visible.has(n.tid) || HIDDEN.has(n.type)) return;
     visible.add(n.tid);
-    if (!n.collapsed) for (const c of kidsAll.get(n.tid) || []) visit_orphan(c);
-  }
+    if (!n.collapsed) for (const c of kidsAll.get(n.tid) || []) visitOrphan(c);
+  };
+  GRAPH.nodes.forEach(n => { if (!reach.has(n.tid)) visitOrphan(n); });
   for (const n of GRAPH.nodes) n.hidden = !visible.has(n.tid);
 
   const vis = GRAPH.nodes.filter(n => visible.has(n.tid));
@@ -679,8 +707,11 @@ function treeActive(row){
   row.classList.add('active');
 }
 async function loadTree(){
+  const host = $('#tree');
+  host.innerHTML = '<div class="empty">加载中…</div>';
   const d = await api('/api/tree', {kb: KB});
-  renderTree(d.tree, $('#tree'));
+  host.innerHTML = '';                       /* 切库时必须清空，否则旧树残留、追加成重复项 */
+  renderTree(d.tree, host);
 }
 
 /* ---------------- 详情面板 / 检索 ---------------- */
