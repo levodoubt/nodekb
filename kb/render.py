@@ -118,10 +118,17 @@ def node_info(nodes: dict[str, dict], tid: str) -> dict:
 
 
 def resolve_path(nodes: dict[str, dict], path: str) -> Optional[str]:
-    """路径解析：精确 TID 优先；否则 TID 前缀唯一匹配。"""
+    """路径解析（三级）：精确 TID → 段边界前缀唯一 → 裸前缀（模糊）唯一。
+
+    唯一命中返回 tid；0 或 2+ 命中返回 None，由调用方列候选。
+    """
     if path in nodes:
         return path
     hits = sorted(t for t in nodes if t == path or t.startswith(path + ":"))
     if len(hits) == 1:
         return hits[0]
+    if not hits:  # 段边界无命中 → 裸前缀模糊（fact:mod → fact:modid / fact:modid-places / fact:modid-trap）
+        hits = sorted(t for t in nodes if t.startswith(path))
+        if len(hits) == 1:
+            return hits[0]
     return None

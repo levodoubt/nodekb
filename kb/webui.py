@@ -94,7 +94,7 @@ main{flex:1;overflow:auto;padding:18px 26px 60px}
   padding:8px 12px;margin-bottom:8px;cursor:pointer}
 .result:hover{border-color:var(--accent)}
 .result h3{margin:0 0 4px;font-size:15px}
-.result .snippet{color:#57606a}
+.result .snippet{color:#57606a;white-space:pre-wrap;font-size:12px}
 .empty{color:var(--muted);text-align:center;padding:40px 0}
 @media (max-width:760px){
   .layout{flex-direction:column}
@@ -356,9 +356,9 @@ async function doSearch(){
       return;
     }
     $('#content').innerHTML =
-      '<h2 style="margin:4px 0 12px">' + data.count + ' 条匹配「' + esc(q) + '」</h2>' +
+      '<h2 style="margin:4px 0 12px">' + data.count + ' 条匹配「' + esc(q) + '」（共 ' + data.total + '）</h2>' +
       data.hits.map(h =>
-        '<div class="result" onclick="readNode(\'' + h.tid + '\')">' +
+        '<div class="result" onclick="readNode(\'' + (h.ref || h.tid) + '\')">' +
         '<h3>' + esc(h.title || h.tid) + ' <span class="badge">' + esc(h.type || '') + '</span></h3>' +
         '<div class="snippet">' + esc(h.snippet) + '</div>' +
         '<div class="meta">' + esc(h.tid) + ' · ' + esc(h.source || '') + '</div></div>'
@@ -482,7 +482,9 @@ class _Handler(BaseHTTPRequestHandler):
                     return self._json({"count": 0, "hits": []})
                 type_ = _q(q, "type") or None
                 limit = min(int(_q(q, "limit", "30") or 30), 200)
-                text, _code = commands.cmd_search(nodes, query, type_=type_, limit=limit, as_json=True)
+                offset = min(int(_q(q, "offset", "0") or 0), 500)
+                text, _code = commands.cmd_search(nodes, query, type_=type_, limit=limit,
+                                                  as_json=True, offset=offset)
                 return self._send(text.encode("utf-8"), "application/json; charset=utf-8")
         except Exception as e:  # 兜底：不崩 server，回 JSON 错误
             return self._json({"error": str(e)}, 500)

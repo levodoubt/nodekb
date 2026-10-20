@@ -52,6 +52,10 @@ def _tools() -> list[dict]:
                     "query": {"type": "string"},
                     "type": {"type": "string", "description": "节点类型过滤，如 doc/todo/git/handover"},
                     "limit": {"type": "integer", "default": 10},
+                    "offset": {"type": "integer", "default": 0,
+                               "description": "跳过前 N 条命中（配合 limit 分页续读）"},
+                    "snippet": {"type": "integer", "default": 240,
+                                "description": "片段窗口字符数（保留换行/缩进，不再压平）"},
                     "kb": {"type": "string"},
                 },
                 "required": ["query"],
@@ -107,7 +111,7 @@ def _call_tool(params: dict) -> dict:
         elif name == "kb_search":
             text, code = commands.cmd_search(
                 nodes, args["query"], type_=args.get("type"), limit=args.get("limit", 10),
-                as_json=True,
+                as_json=True, offset=args.get("offset", 0), snippet=args.get("snippet", 240),
             )
         elif name == "kb_diag":
             problems: list = []

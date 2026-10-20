@@ -101,7 +101,7 @@ def cmd_read(
     try:
         tid = render.resolve_path(nodes, target)
         if tid is None:
-            cands = sorted(t for t in nodes if t.startswith(target + ":"))[:10]
+            cands = sorted({t for t in nodes if t.startswith(target) or t.startswith(target + ":")})[:10]
             msg = f"未找到节点: {target}"
             if cands:
                 msg += "；候选: " + "、".join(cands)
@@ -160,12 +160,22 @@ def _search_terms(query: str) -> list[str]:
     return list(dict.fromkeys(terms))
 
 
+def _stable_tid(nodes: dict[str, dict], tid: str) -> str:
+    """位置型段落 TID 提升为稳定句柄：沿 parent 上溯到文件/显式节点/文件夹。"""
+    cur = nodes[tid]
+    while cur.get("positional") and cur["parent_tid"] in nodes:
+        cur = nodes[cur["parent_tid"]]
+    return cur["tid"]
+
+
 def cmd_search(
     nodes: dict[str, dict],
     query: str,
     type_: Optional[str] = None,
     limit: int = 10,
     as_json: bool = False,
+    offset: int = 0,
+    snippet: int = 240,
 ) -> tuple[str, int]:
     terms = _search_terms(query)
     idx: dict[str, set[str]] = {}
@@ -193,19 +203,16 @@ def cmd_search(
             if type_ and node["type"] != type_:
                 continue
             rows.append(node)
-            if len(rows) >= limit:
-                break
-    if not rows:
+    if not rows:  # LIKE 兜底
         for node in nodes.values():
             if type_ and node["type"] != type_:
                 continue
             if query not in node["title"] and query not in node["content"] and query not in node["tid"]:
                 continue
             rows.append(node)
-            if len(rows) >= limit:
-                break
+    total = len(rows)
     hits = []
-    for node in rows[:limit]:
+    for node in rows[offset : offset + limit]:
         try:
             text = render.render_node(nodes, node["tid"])
         except render.TransclusionError:
@@ -213,12 +220,18 @@ def cmd_search(
         idx0 = text.find(terms[0]) if terms else -1
         if idx0 < 0:
             idx0 = 0
+        stable = _stable_tid(nodes, node["tid"])
+        half = max(40, snippet // 2)
         hits.append({
-            "tid": node["tid"], "type": node["type"], "title": node["title"],
-            "source": node["source"], "snippet": text[max(0, idx0 - 60) : idx0 + 120].replace("\n", " "),
+            # tid=稳定句柄（位置型段落上溯到文件/显式节点），ref=实际命中节点，positional 标记
+            "tid": stable, "ref": node["tid"], "positional": bool(node.get("positional")),
+            "type": node["type"], "title": node["title"],
+            "source": node["source"],
+            "snippet": text[max(0, idx0 - half) : idx0 + half + 1],  # 保留换行/缩进，不再压平
         })
     if as_json:
-        return json.dumps({"count": len(hits), "hits": hits}, ensure_ascii=False, indent=2), 0
+        return json.dumps({"total": total, "count": len(hits), "offset": offset, "hits": hits},
+                          ensure_ascii=False, indent=2), 0
     lines = [f"{h['tid']}  [{h['type']}] {h['title']}\n    …{h['snippet']}…" for h in hits]
     return "\n".join(lines) if lines else f"无匹配: {query}", 1 if not hits else 0
 

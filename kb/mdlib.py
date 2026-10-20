@@ -139,6 +139,7 @@ def parse_file(path: Path, file_tid: str, folder_type: str, parent_tid: str) -> 
             tid = section_tid(file_tid, title, sec_index)
             sec_node = _new_node(tid, title, folder_type, default_parent(), float(lineno),
                                  f"{rel}#L{lineno}")
+            sec_node["positional"] = True  # 位置型段落 TID：插章节就漂移，不可作引用/检索句柄
             nodes.append(sec_node)
             continue
         (sec_node or file_node)["content"].append(line)

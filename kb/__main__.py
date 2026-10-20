@@ -33,6 +33,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("query")
     p.add_argument("--type")
     p.add_argument("--limit", type=int, default=10)
+    p.add_argument("--offset", type=int, default=0, help="跳过前 N 条命中（配合 limit 分页续读）")
+    p.add_argument("--snippet", type=int, default=240, help="片段窗口字符数（保留换行/缩进）")
     p.add_argument("--json", action="store_true")
     p.add_argument("--kb", default=None)
     p.add_argument("--lib", default=None)
@@ -100,7 +102,8 @@ def main(argv: list[str] | None = None) -> int:
                                            maxlen=args.maxlen)
         elif args.command == "search":
             text, code = commands.cmd_search(nodes, args.query, type_=args.type,
-                                             limit=args.limit, as_json=args.json)
+                                             limit=args.limit, as_json=args.json,
+                                             offset=args.offset, snippet=args.snippet)
         elif args.command == "diag":
             text, code = commands.cmd_diag(nodes, problems)
         elif args.command == "dump":

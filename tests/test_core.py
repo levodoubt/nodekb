@@ -128,7 +128,9 @@ class TestCommands(unittest.TestCase):
         nodes = parse(tmp)
         out, code = commands.cmd_search(nodes, "白模 denoise", as_json=True)
         hits = json.loads(out)["hits"]
-        self.assertEqual(hits[0]["tid"], "doc:01:1.1")  # 双词命中排前
+        self.assertEqual(hits[0]["ref"], "doc:01:1.1")  # 命中节点
+        self.assertEqual(hits[0]["tid"], "doc:01")      # 稳定句柄（位置型段落上溯到文件）
+        self.assertTrue(hits[0]["positional"])
 
     def test_register_creates_nodekb(self):
         tmp = Path(tempfile.mkdtemp())
@@ -232,6 +234,46 @@ class TestFixes(unittest.TestCase):
         out, code = commands.cmd_diag(nodes)
         self.assertEqual(code, 2)
         self.assertIn("循环引用", out)
+
+    def test_resolve_fuzzy_lists_candidates(self):  # 裸前缀模糊
+        tmp = make_lib({"01.md": "<node name=\"fact:modid\">1</node>\n",
+                        "02.md": "<node name=\"fact:modid-places\">2</node>\n",
+                        "03.md": "<node name=\"fact:modid-trap\">3</node>\n"})
+        nodes = parse(tmp)
+        text, code = commands.cmd_read(nodes, "fact:mod", maxlen=0)
+        self.assertEqual(code, 2)
+        self.assertIn("候选", text)
+        self.assertIn("fact:modid", text)
+        self.assertIn("fact:modid-places", text)
+        self.assertIn("fact:modid-trap", text)
+
+    def test_resolve_fuzzy_unique(self):
+        tmp = make_lib({"01.md": "<node name=\"fact:modid\">1</node>\n"})
+        nodes = parse(tmp)
+        text, code = commands.cmd_read(nodes, "fact:mod", node=True, maxlen=0)
+        self.assertEqual(code, 0)
+        self.assertEqual(text, "1")  # 唯一模糊命中直接解析
+
+    def test_search_offset_and_total(self):
+        tmp = make_lib({"01.md": "## 1\n\nreconcile 甲。\n", "02.md": "## 2\n\nreconcile 乙。\n",
+                        "03.md": "## 3\n\nreconcile 丙。\n"})
+        nodes = parse(tmp)
+        out, code = commands.cmd_search(nodes, "reconcile", limit=2, as_json=True)
+        d = json.loads(out)
+        self.assertEqual(d["total"], 3)
+        self.assertEqual(d["count"], 2)
+        first = d["hits"][0]["ref"]
+        out2, _ = commands.cmd_search(nodes, "reconcile", limit=2, offset=2, as_json=True)
+        d2 = json.loads(out2)
+        self.assertEqual(d2["count"], 1)  # 偏移续读剩余 1 条
+        self.assertNotEqual(d2["hits"][0]["ref"], first)
+
+    def test_snippet_keeps_newlines(self):  # 代码块缩进不再压平
+        tmp = make_lib({"01.md": "## 1\n\n```python\ndef f():\n    return 1\n```\nreconcile 出现。\n"})
+        nodes = parse(tmp)
+        out, _ = commands.cmd_search(nodes, "reconcile", as_json=True, snippet=80)
+        snip = json.loads(out)["hits"][0]["snippet"]
+        self.assertIn("\n", snip)
 
 
 if __name__ == "__main__":

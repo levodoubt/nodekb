@@ -70,7 +70,7 @@ webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 ```
 
 - read：默认整支渲染投影（[[TID]] 展开，文件/文件夹引用展开整支子树）；`--toc` 目录视图；`--raw` 元信息（含 source 行号）；`--maxlen` 整支字符上限（默认 50000，`0`=不限；超限报错并建议 `--node`/小节）。
-- search：自建 2-gram 倒排（实时），中文自然语言可用，多词加权，LIKE 兜底。
+- search：自建 2-gram 倒排（实时），中文自然语言可用，多词加权，LIKE 兜底；`offset` 分页续读、`snippet` 片段窗口；命中 `tid` 为稳定句柄（位置型段落上溯到文件/显式节点）、`ref` 为实际命中节点、`positional` 标记；片段保留换行/缩进。
 - diag：悬空/循环引用（循环含源行号）、孤儿节点、树环、重复 TID、位置型 TID 引用（`文件:序号`）、内容漂移（≥40 字符跨节点物理重复块，最多报 20 条）。
 - 解析健壮性：` ``` ` 围栏内不切分（`##`/`<node>` 按原文）、BOM 剥除、重复 TID 可在传入 problems 时降级「跳过冲突项 + 其余照读」。
 - 错误语义：未找到/前缀歧义时列出候选；`--lib` 路径不存在时报错同时给出原参数。
@@ -118,5 +118,6 @@ webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 - [x] 围栏内 `##` 不切分、BOM 剥除；重复 TID 降级（problems 收集）实测。
 - [x] diag 结构 + 内容级实测（comfyui 508 / minecraft 339 / filmmeasure 154 节点）：三库结构 0 错误；漂移检测实测检出模板类重复块。
 - [x] 位置型 TID 引用 / 内容漂移 / 循环源行号 / 前缀歧义候选 回归测试通过。
+- [x] search 稳定句柄实测：`kb_search reconcile` 首条 tid=`index:entry`（非位置型），ref=`index:entry:6`，positional 标记，片段保留换行；`kb_read fact:mod` 列候选 fact:mod-dir/modid/modid-places/modid-trap。
 - [x] MCP 四工具交互正常；重复 TID 报错。
 - [x] WebUI：/api/list·tree·toc·read·raw·search 全接口实测通过（minecraft 库，339 节点），引用展开正常；markdown 渲染（表格/任务清单/嵌套列表/引用递归）实测通过。
