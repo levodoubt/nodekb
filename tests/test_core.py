@@ -275,6 +275,23 @@ class TestFixes(unittest.TestCase):
         snip = json.loads(out)["hits"][0]["snippet"]
         self.assertIn("\n", snip)
 
+    def test_explicit_node_transclusion_no_sibling_dump(self):  # kind 规则：显式节点不连带展开同文件兄弟
+        tmp = make_lib({"01.md": "<node name=\"fact:a\">值A</node>\n<node name=\"fact:b\">值B</node>\n"
+                                  "<node name=\"fact:c\">值C</node>\n"})
+        nodes = parse(tmp)
+        text = render.render_node(nodes, "fact:a")  # fact:a 是同文件首节点（缺省父），但不展开兄弟
+        self.assertIn("值A", text)
+        self.assertNotIn("值B", text)
+        self.assertNotIn("值C", text)
+
+    def test_diag_intra_node_dup_lines(self):  # 节点内重复长行 lint
+        ln = "这条命令行内容足够长，超过四十个字符，用于测试节点内部重复行的漂移检测必须达标。"
+        tmp = make_lib({"01.md": "## 1\n\n" + ln + "\n" + ln + "\n"})
+        nodes = parse(tmp)
+        out, code = commands.cmd_diag(nodes)
+        self.assertEqual(code, 2)
+        self.assertIn("节点内重复行", out)
+
 
 if __name__ == "__main__":
     unittest.main()

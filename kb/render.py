@@ -24,10 +24,6 @@ def _children(nodes: dict[str, dict], tid: str) -> list[dict]:
     )
 
 
-def _has_children(nodes: dict[str, dict], tid: str) -> bool:
-    return any(n["parent_tid"] == tid for n in nodes.values())
-
-
 def _cycle_msg(seen: list[str], target: str, nodes: dict[str, dict]) -> str:
     msg = "循环引用: " + " -> ".join(seen + [target])
     node = nodes.get(target)
@@ -62,7 +58,8 @@ def _expand(text: str, nodes: dict[str, dict], seen: list[str]) -> str:
             raise TransclusionError(_cycle_msg(seen, target, nodes))
         nxt = seen + [target]
         if target in nodes:
-            if _has_children(nodes, target):
+            # 仅 文件夹/文件 容器展开整支子树；显式 <node> 原子引用只展开自身（避免同文件兄弟被连带展开）
+            if nodes[target].get("kind") in ("folder", "file"):
                 out.append(_project_container(nodes, target, nxt))
             else:
                 out.append(_expand(nodes[target]["content"], nodes, nxt))

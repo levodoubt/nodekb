@@ -37,10 +37,11 @@ def section_tid(file_tid: str, title: str, idx: int) -> str:
     return f"{file_tid}:{idx}"
 
 
-def _new_node(tid, title, type_, parent, sort, source, content=None) -> dict:
+def _new_node(tid, title, type_, parent, sort, source, content=None, kind="node") -> dict:
     return {
         "tid": tid, "title": title, "type": type_, "parent_tid": parent,
-        "sort": sort, "content": [] if content is None else content, "source": source,
+        "sort": sort, "content": [] if content is None else content,
+        "source": source, "kind": kind,
     }
 
 
@@ -67,7 +68,7 @@ def parse_file(path: Path, file_tid: str, folder_type: str, parent_tid: str) -> 
 
     nodes: list[dict] = []
     file_node = _new_node(file_tid, h1 or path.stem, folder_type, parent_tid, 0.0,
-                          f"{rel}#L1-L{len(lines)}")
+                          f"{rel}#L1-L{len(lines)}", kind="file")
     nodes.append(file_node)
 
     first_node_tid: Optional[str] = None  # 文件根（第一个 <node> 的 name）
@@ -138,7 +139,7 @@ def parse_file(path: Path, file_tid: str, folder_type: str, parent_tid: str) -> 
             title = m2.group(1).strip() or "(unnamed)"
             tid = section_tid(file_tid, title, sec_index)
             sec_node = _new_node(tid, title, folder_type, default_parent(), float(lineno),
-                                 f"{rel}#L{lineno}")
+                                 f"{rel}#L{lineno}", kind="section")
             sec_node["positional"] = True  # 位置型段落 TID：插章节就漂移，不可作引用/检索句柄
             nodes.append(sec_node)
             continue
@@ -165,7 +166,7 @@ def parse_library(lib_dir: str, problems: Optional[list] = None) -> dict[str, di
     if not root.is_dir():
         raise ValueError(f"库目录不存在: {lib_dir}")
     nodes: dict[str, dict] = {
-        ROOT_TID: _new_node(ROOT_TID, ".nodekb", "root", None, 0.0, "", content=""),
+        ROOT_TID: _new_node(ROOT_TID, ".nodekb", "root", None, 0.0, "", content="", kind="folder"),
     }
 
     def duplicate(tid: str, what: str) -> None:
@@ -184,7 +185,7 @@ def parse_library(lib_dir: str, problems: Optional[list] = None) -> dict[str, di
                 duplicate(folder_tid, f"文件夹 {d}")
                 continue
             nodes[folder_tid] = _new_node(folder_tid, rel[-1], folder_type, parent_tid,
-                                          float(len(rel)), "", content="")
+                                          float(len(rel)), "", content="", kind="folder")
         for name in sorted(filenames):
             if not name.endswith(".md"):
                 continue

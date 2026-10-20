@@ -261,6 +261,31 @@ def _dup_blocks(nodes: dict[str, dict]) -> list[str]:
     return out[:20]
 
 
+def _intra_dup_lines(nodes: dict[str, dict]) -> list[str]:
+    """节点内重复行：同一节点里 ≥40 字符的正文/命令行出现 2+ 次（整段拷贝的漂移源）。
+
+    跳过代码围栏内行（copy-ready 块可有意重复）、表格行、纯符号行，避免误报。
+    """
+    out = []
+    for n in nodes.values():
+        counts: dict[str, int] = {}
+        fenced = False
+        for line in n["content"].splitlines():
+            s = line.strip()
+            if s.startswith("```"):
+                fenced = not fenced
+                continue
+            if fenced or s.startswith("|") or not s:
+                continue
+            if len(s) >= 40 and any(c.isalnum() for c in s):
+                counts[s] = counts.get(s, 0) + 1
+        for s, c in counts.items():
+            if c >= 2:
+                out.append(f"节点内重复行: {n['tid']} 出现 {c} 次「{s[:60]}{'…' if len(s) > 60 else ''}」")
+                break  # 每节点只报 1 条，避免刷屏
+    return out[:20]
+
+
 def cmd_diag(nodes: dict[str, dict], problems: Optional[list] = None) -> tuple[str, int]:
     problems = list(problems or [])
     for node in nodes.values():
@@ -280,6 +305,7 @@ def cmd_diag(nodes: dict[str, dict], problems: Optional[list] = None) -> tuple[s
             problems.append(f"孤儿节点: {node['tid']} (父 {node['parent_tid']} 不存在)")
     _detect_tree_cycles(nodes, problems)
     problems.extend(_dup_blocks(nodes))
+    problems.extend(_intra_dup_lines(nodes))
     code = 2 if problems else 0
     report = {
         "exit_code": code,
