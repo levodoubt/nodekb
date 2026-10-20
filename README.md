@@ -150,4 +150,4 @@ python -m unittest discover -s tests
 
 ## License
 
-No license file is included yet. Add one before redistributing or accepting contributions.
+[MIT](LICENSE) © 2026 levodoubt
