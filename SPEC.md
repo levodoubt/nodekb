@@ -1,0 +1,96 @@
+# NodeKB —— 节点化项目知识库 接口设计（SPEC v0.3，.nodekb 递归）
+
+## 1. 目标与定位
+
+**md 文件即资料库，节点是 md 中以标记标定的文本块**；NodeKB 是纯解析/渲染层（零持久化状态），提供 read / search / diag 供 Agent（MCP）与人类（dump/WebUI）使用。
+
+设计基线：
+
+- **库根 = 技能文件夹下 `.nodekb/`**，递归解析其内全部 md——任意目录结构、任意嵌套、自定义类型天然支持。
+- **写 = 直接写 `.nodekb` 下的 md**；无 edit 命令；版本/回滚由编辑工具链的文件追踪承担。
+- **所有文本皆节点**：显式 `<node>` 段 + 隐式 `##` H2 段统一成节点。
+- 单一真源天然成立：无第二存储、无同步、无单点故障。
+
+## 2. 节点模型（.nodekb 递归）
+
+```
+.nodekb/                     ← 库根（tid=root）
+├── doc/                     ← 文件夹节点（type=doc，parent=root）
+│   ├── 01.md                ← 文件节点（tid=doc:01，parent=doc）
+│   │   ├── <node name="a">  ← 第一个 <node> = 文件根（parent=文件节点）
+│   │   │   └── <node name="b">   ← b.parent 缺省 = a（文件根）
+│   │   └── ## 概述           ← 隐式段（parent 缺省 = 文件根）
+├── ModelInfo/               ← 自定义文件夹（type=modelinfo）
+│   └── readme.md
+```
+
+### 层级与缺省规则
+
+| 元素 | 节点 | type | parent 缺省 |
+|---|---|---|---|
+| 文件夹（递归） | 文件夹节点 | **文件夹名** | 父文件夹 |
+| md 文件 | 文件节点 | 文件夹名 | 所在文件夹 |
+| `<node name="X">` 第一个 | 显式节点 | 文件夹名 | 文件节点 |
+| `<node name="X">` 其余 | 显式节点 | 文件夹名 | **文件内第一个 `<node>` 段的 name** |
+| `## 标题`（非节点文本） | 隐式节点 | 文件夹名 | 文件内第一个 `<node>` name，否则文件节点 |
+
+### 显式 `<node>` 语法
+
+```html
+<node name="a" parent="b" type="c">
+  文本
+</node>
+```
+
+- `name` = 完整 TID（必需）；`parent` / `type` 可选（缺省规则如上）。
+- 允许单行：`<node name="fact:ver">20261003.0.0</node>`；允许嵌套（内层须单行闭合）。
+
+### 引用（transclusion）
+
+- `[[TID]]` 引用任意节点，read 时展开；环检测报错；悬空引用保留原文 + diag 报告。
+- 物理唯一、逻辑多态：文本只存在于 `.nodekb` 的 md 一处，投影出现在所有引用处。
+
+## 3. TID 规范
+
+- 文件夹/文件/段节点由程序派生：`{文件夹tid}:{文件名slug}`、`{文件tid}:{章节号}`。
+- 显式 `<node name>` 即完整 TID（全局唯一，重复解析报错）。
+- 命名字符集：`a-z0-9 中文 . _ - :`；段级优先章节号（`## 3.1` → `:3.1`），否则序号。
+
+## 4. 命令接口（CLI 与 MCP 同签名）
+
+```
+read <tid> [--node] [--toc] [--raw] [--json] [--kb N | --lib 技能目录或.nodekb]
+search <query> [--type T] [--limit N] [--json] [--kb N | --lib …]
+diag [--json] [--kb N | --lib …]
+dump --out <dir> [--kb N | --lib …]
+register <name> <技能目录>      # 自动创建 .nodekb 库根
+list [--json]
+```
+
+- read：默认整支渲染投影（[[TID]] 展开）；`--toc` 目录视图；`--raw` 元信息（含 source 行号）。
+- search：自建 2-gram 倒排（实时），中文自然语言可用，多词加权，LIKE 兜底。
+- diag：悬空/循环引用、孤儿节点、树环、重复 TID。
+
+## 5. MCP 通用化
+
+- 只配置一个 nodekb 本体 MCP（stdio），目标库通过 `kb`（注册名）选择。
+- 四工具：`kb_list` / `kb_read` / `kb_search` / `kb_diag`（无 edit——写文档 = 原生 write/edit）。
+- 注册表：`nodekb/kb_registry.json`（name → 技能目录），`kb register` 维护。
+- Agent 典型流程：`kb_list` → `kb_search(kb=库名, query)` → `kb_read(kb=库名, target=tid)`；**写 = 改 `.nodekb` 下 md**。
+
+## 6. 存储位置
+
+- 库 = 技能文件夹下 `.nodekb/`，md 递归组织（任意目录结构）。
+- 技能目录原 doc/ 等保留为备份（迁移时复制，不删除）。
+- 版本历史由编辑工具链承担，NodeKB 不持有。
+
+## 7. 验证清单（回归门禁）
+
+- [x] `.nodekb` 递归解析：文件夹/文件/隐式段/显式 `<node>` 四级。
+- [x] 缺省规则：type=文件夹名；parent=文件内第一个 `<node>` name，否则文件节点。
+- [x] 自定义文件夹类型（ModelInfo → modelinfo）与嵌套子目录。
+- [x] `<node>` 单行/多行/嵌套（内层单行闭合）。
+- [x] `[[TID]]` 展开；循环报错；悬空 diag 检出。
+- [x] read 整支 / --toc / --raw；search 中文多词；dump 导出。
+- [x] diag 三库实测（comfyui 508 / minecraft 193 / filmmeasure 154 节点）exit 0。
+- [x] MCP 四工具交互正常；重复 TID 报错。

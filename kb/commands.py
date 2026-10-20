@@ -1,0 +1,258 @@
+"""NodeKB 命令逻辑（md 即库，零持久化状态）。
+
+命令：read / search / diag / register / list / dump（edit 已删——修改 = 直接改 md）。
+库 = 技能目录下多个 type 目录（doc/git-history/todo/handover/自定义），实时解析。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from pathlib import Path
+from typing import Optional
+
+from . import mdlib, parse, render
+
+# ---------------------------------------------------------------- 库注册表
+
+REGISTRY_PATH = str(Path(__file__).resolve().parent.parent / "kb_registry.json")
+
+
+def load_registry() -> dict:
+    if not os.path.isfile(REGISTRY_PATH):
+        return {}
+    try:
+        with open(REGISTRY_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("libraries", {}) if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_registry(reg: dict) -> None:
+    with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+        json.dump({"libraries": reg}, f, ensure_ascii=False, indent=2)
+
+
+def register_db(name: str, lib_dir: str) -> dict:
+    """注册一个库。技能目录下自动创建 .nodekb 作为库根。"""
+    base = Path(lib_dir).resolve()
+    nodekb = base / ".nodekb"
+    nodekb.mkdir(parents=True, exist_ok=True)
+    reg = load_registry()
+    reg[name] = {"path": str(base)}
+    save_registry(reg)
+    return reg[name]
+
+
+def unregister_db(name: str) -> None:
+    reg = load_registry()
+    reg.pop(name, None)
+    save_registry(reg)
+
+
+def lib_dir_of(kb: Optional[str], lib: Optional[str]) -> str:
+    """定位库根：lib（技能目录或 .nodekb 路径）优先，否则注册表 kb 名。返回 .nodekb 目录。"""
+    if lib:
+        p = Path(lib)
+        return str(p if p.name == ".nodekb" else p / ".nodekb")
+    if kb:
+        info = load_registry().get(kb) or {}
+        if not info:
+            raise KeyError(f"未注册的库: {kb}（用 kb register <名称> <技能目录>）")
+        return str(Path(info["path"]) / ".nodekb")
+    raise ValueError("未指定库：用 --kb <注册名> 或 --lib <技能目录/.nodekb>")
+
+
+def load_library(kb: Optional[str] = None, lib: Optional[str] = None) -> dict[str, dict]:
+    """解析 .nodekb 库为节点映射。"""
+    return mdlib.parse_library(lib_dir_of(kb, lib))
+
+
+# ---------------------------------------------------------------- read
+
+def cmd_read(
+    nodes: dict[str, dict],
+    target: str,
+    node: bool = False,
+    raw: bool = False,
+    as_json: bool = False,
+    toc: bool = False,
+) -> tuple[str, int]:
+    try:
+        tid = render.resolve_path(nodes, target)
+        if tid is None:
+            return f"未找到节点: {target}", 2
+        if toc:
+            out = "\n".join(render.toc_lines(nodes, tid))
+        elif raw:
+            out = json.dumps(render.node_info(nodes, tid), ensure_ascii=False, indent=2)
+        elif node:
+            out = render.render_node(nodes, tid)
+        else:
+            out = render.render_subtree(nodes, tid)
+        if as_json and not raw and not toc:
+            out = json.dumps({"tid": tid, "text": out}, ensure_ascii=False, indent=2)
+        return out, 0
+    except render.TransclusionError as e:
+        return f"错误: {e}", 2
+    except KeyError as e:
+        return str(e), 2
+
+
+# ---------------------------------------------------------------- search
+
+# 中文虚词 2-gram（检索分词时过滤）
+_STOP_GRAMS = {
+    "怎么", "如何", "是否", "什么", "为什么", "一个", "这种", "那个", "这个",
+    "他们", "我们", "你们", "进行", "以及", "还是", "就是", "不是", "没有",
+    "可以", "需要", "问题", "情况", "时候", "地方", "东西", "因为", "所以",
+    "但是", "然后", "接着", "开始", "最后", "主要", "目前", "已经", "现在",
+    "等等", "如果", "那么", "就是", "不能", "不会", "应该", "可能",
+}
+
+
+def _search_terms(query: str) -> list[str]:
+    """query → 检索 term：非中文 token 原样；连续中文按 2-gram 拆分并过滤虚词。"""
+    terms: list[str] = []
+    for tok in re.findall(r"[\u4e00-\u9fff]+|[a-zA-Z0-9_.-]+", query):
+        if re.fullmatch(r"[\u4e00-\u9fff]+", tok):
+            if len(tok) <= 2:
+                if tok not in _STOP_GRAMS:
+                    terms.append(tok)
+                continue
+            seen: set[str] = set()
+            for i in range(len(tok) - 1):
+                g = tok[i : i + 2]
+                if g not in seen and g not in _STOP_GRAMS:
+                    seen.add(g)
+                    terms.append(g)
+                if len(terms) >= 10:
+                    break
+        else:
+            terms.append(tok)
+    return list(dict.fromkeys(terms))
+
+
+def cmd_search(
+    nodes: dict[str, dict],
+    query: str,
+    type_: Optional[str] = None,
+    limit: int = 10,
+    as_json: bool = False,
+) -> tuple[str, int]:
+    terms = _search_terms(query)
+    idx: dict[str, set[str]] = {}
+    for node in nodes.values():
+        text = f"{node['title']}\n{node['content']}\n{node['tid']}".lower()
+        grams: set[str] = set()
+        for tok in re.findall(r"[\u4e00-\u9fff]+|[a-z0-9_]+", text):
+            if tok.isascii():
+                grams.add(tok)
+            else:
+                for i in range(len(tok) - 1):
+                    grams.add(tok[i : i + 2])
+        for g in grams:
+            idx.setdefault(g, set()).add(node["tid"])
+
+    scores: dict[str, int] = {}
+    for g in terms:
+        for tid in idx.get(g, ()):
+            scores[tid] = scores.get(tid, 0) + 1
+    rows: list = []
+    if scores:
+        ranked = sorted(scores.items(), key=lambda kv: (-kv[1], len(nodes[kv[0]]["content"])))
+        for tid, _score in ranked:
+            node = nodes[tid]
+            if type_ and node["type"] != type_:
+                continue
+            rows.append(node)
+            if len(rows) >= limit:
+                break
+    if not rows:
+        for node in nodes.values():
+            if type_ and node["type"] != type_:
+                continue
+            if query not in node["title"] and query not in node["content"] and query not in node["tid"]:
+                continue
+            rows.append(node)
+            if len(rows) >= limit:
+                break
+    hits = []
+    for node in rows[:limit]:
+        try:
+            text = render.render_node(nodes, node["tid"])
+        except render.TransclusionError:
+            text = node["content"]
+        idx0 = text.find(terms[0]) if terms else -1
+        if idx0 < 0:
+            idx0 = 0
+        hits.append({
+            "tid": node["tid"], "type": node["type"], "title": node["title"],
+            "source": node["source"], "snippet": text[max(0, idx0 - 60) : idx0 + 120].replace("\n", " "),
+        })
+    if as_json:
+        return json.dumps({"count": len(hits), "hits": hits}, ensure_ascii=False, indent=2), 0
+    lines = [f"{h['tid']}  [{h['type']}] {h['title']}\n    …{h['snippet']}…" for h in hits]
+    return "\n".join(lines) if lines else f"无匹配: {query}", 1 if not hits else 0
+
+
+# ---------------------------------------------------------------- diag
+
+def cmd_diag(nodes: dict[str, dict]) -> tuple[str, int]:
+    problems: list[str] = []
+    for node in nodes.values():
+        for ref_tid in parse.extract_refs(node["content"]):
+            if ref_tid not in nodes:
+                problems.append(f"悬空引用: {node['tid']} → [[{ref_tid}]]")
+    for tid in nodes:
+        try:
+            render.render_node(nodes, tid)
+        except render.TransclusionError as e:
+            problems.append(f"循环引用 @{tid}: {e}")
+    for node in nodes.values():
+        if node["parent_tid"] is not None and node["parent_tid"] not in nodes:
+            problems.append(f"孤儿节点: {node['tid']} (父 {node['parent_tid']} 不存在)")
+    _detect_tree_cycles(nodes, problems)
+    code = 2 if problems else 0
+    report = {
+        "exit_code": code,
+        "errors": problems,
+        "node_count": len(nodes),
+        "types": _type_counts(nodes),
+    }
+    return json.dumps(report, ensure_ascii=False, indent=2), code
+
+
+def _detect_tree_cycles(nodes: dict[str, dict], problems: list) -> None:
+    for tid in nodes:
+        cur = tid
+        seen: set[str] = set()
+        while cur is not None and cur in nodes:
+            if cur in seen:
+                problems.append(f"树环: {' -> '.join(list(seen) + [cur])}")
+                break
+            seen.add(cur)
+            cur = nodes[cur]["parent_tid"]
+
+
+def _type_counts(nodes: dict[str, dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for n in nodes.values():
+        counts[n["type"]] = counts.get(n["type"], 0) + 1
+    return dict(sorted(counts.items()))
+
+
+# ---------------------------------------------------------------- dump
+
+def cmd_dump(nodes: dict[str, dict], out_dir: str) -> tuple[str, int]:
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    written = []
+    for tid in mdlib.lib_root_tids(nodes):
+        text = render.render_subtree(nodes, tid)
+        path = out / f"{tid}.md"
+        path.write_text(text, encoding="utf-8")
+        written.append(str(path))
+    return json.dumps({"written": written}, ensure_ascii=False, indent=2), 0
