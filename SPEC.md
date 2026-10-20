@@ -83,13 +83,14 @@ webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 - 注册表：`nodekb/kb_registry.json`（name → 技能目录），`kb register` 维护。
 - Agent 典型流程：`kb_list` → `kb_search(kb=库名, query)` → `kb_read(kb=库名, target=tid)`；**写 = 改 `.nodekb` 下 md**，下次读取自动快照（见 §7）。
 
-## 6. WebUI（人类只读界面 · 星图）
+## 6. WebUI（人类只读界面 · 树状图）
 
 `python -m kb webui`：纯只读本地 HTTP server（stdlib http.server，零依赖；单 HTML 内联 CSS/JS 零 CDN）。仅绑 127.0.0.1，默认端口 8666。
 
-- **关系星图**（暗色）：节点 = 方形文本框（深色底 + 类型色描边，显示 `name` 上限 50 字符），边 = parent 层级 + `[[TID]]` ref 引用；力导向布局（网格斥力 + 弹簧，力/速度/坐标钳制防 500+ 节点发散）。
-- **左侧栏**：类型 chip 筛选 + 层级树（点击定位居中）+ 视图调节滑杆（排斥力/线明度实时生效）。
-- **点击节点 → 右侧详情面板**（markdown 渲染，引用展开；整支/仅节点/元信息）；滚轮缩放、平移、拖节点、悬停高亮、Esc 关闭。
+- **横向树状图**（父左子右，确定性布局）：每个顶层类型一列，层级向右展开；节点 = 方形文本框（深色底 + 类型色描边，`name` 上限 50 字符）；连线 = 直角层级线 + `[[TID]]` ref 贝塞尔弧线。无力导向动画，布局与视口均为一次同步计算，无收敛/竞态问题。
+- **折叠/展开**：方块左缘小三角；深层子树默认折叠（≤2 层）。
+- **左侧栏**：类型 chip 筛选 + 层级树（点击定位居中）+ 视图调节（列宽/线明度滑杆）。
+- **点击节点 → 右侧详情面板**（markdown 渲染，引用展开；整支/仅节点/元信息）；滚轮缩放、拖空白平移、悬停高亮、Esc 关闭。
 - 无任何编辑入口；改文档 = 直接改 `.nodekb` 下的 md。
 
 只读接口（JSON，错误统一 `{"error": …}`）：
@@ -134,4 +135,4 @@ webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 - [x] search 稳定句柄实测：`kb_search reconcile` 首条 tid=`index:entry`（非位置型），ref=`index:entry:6`，positional 标记，片段保留换行；`kb_read fact:mod` 列候选 fact:mod-dir/modid/modid-places/modid-trap。
 - [x] MCP 六工具交互正常；重复 TID 报错。
 - [x] vcs：register 自动 init；改动后读取自动快照（`autosnap: N 处变更`）实测；`.git` 点目录不污染节点树；三库（minecraft/comfyui/filmmeasure）已初始化并含初始快照。
-- [x] WebUI：/api/list·graph·tree·toc·read·raw·search 全接口实测通过；星图（暗色/力导向/类型着色/chip 筛选/点击详情/缩放平移）浏览器实测 5 项全过（comfyui 583 节点坐标有界 ≤410）。
+- [x] WebUI：/api/list·graph·tree·toc·read·raw·search 全接口实测通过；树状图（父左子右/确定性布局/类型着色/折叠展开/点击详情/筛选/列宽滑杆）实测：11 类型列铺满画布、parent 0 违例、无 rAF 视口问题。

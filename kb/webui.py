@@ -3,13 +3,13 @@
 md 即库：只读；改文档 = 直接改 `.nodekb` 下的 md，本界面无任何编辑入口。
 只读 HTTP 接口（JSON）：
   /api/list                    注册库列表（仅保留存在 .nodekb 的条目）
-  /api/graph?kb=               星图数据：节点（name/type/kind/字符数）+ 边（parent 层级 / ref 转译引用）
+  /api/graph?kb=               树图数据：节点（name/type/kind/字符数）+ 边（parent 层级 / ref 转译引用）
   /api/tree?kb=                全库导航树（递归 JSON）
   /api/toc?kb=&tid=            目录视图行（render.toc_lines，tid 可省略=root）
   /api/read?kb=&tid=&node=1    渲染阅读视图（[[TID]] 已展开；node=1 仅单节点）
   /api/raw?kb=&tid=            节点元信息（含 source 行号）
   /api/search?kb=&q=&type=&limit=&offset=  全文检索（中文 2-gram）
-页面：单 HTML 内联 CSS/JS（暗色星图 + 力导向布局，零 CDN），可离线使用。
+页面：单 HTML 内联 CSS/JS（暗色横向树状图，确定性布局，零 CDN），可离线使用。
 
 运行：python -m kb webui [--host 127.0.0.1] [--port 8666]  （或 python -m kb.webui）
 """
@@ -33,7 +33,7 @@ HTML_PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NodeKB · 星图</title>
+<title>NodeKB · 树状图</title>
 <style>
 :root{
   --bg:#0f1115; --panel:#161a22; --border:#262c38; --fg:#d7dde6;
@@ -135,20 +135,23 @@ canvas#graph{position:fixed;top:0;left:268px;right:0;bottom:0;z-index:1;cursor:g
   <div class="lsec">
     <div class="lsec-h">视图调节</div>
     <div class="ctl">
-      <label>排斥力 <input id="sl-rep" type="range" min="30" max="300" value="100"><span id="rep-val">100%</span></label>
+      <label>列宽 <input id="sl-col" type="range" min="50" max="250" value="100"><span id="col-val">100%</span></label>
       <label>线明度 <input id="sl-edge" type="range" min="0" max="300" value="100"><span id="edge-val">100%</span></label>
     </div>
   </div>
 </aside>
 <canvas id="graph"></canvas>
-<div class="hint">滚轮缩放 · 拖空白平移 · 拖节点调整 · 点击节点/树项查看详情 · Esc 关闭</div>
+<div class="hint">滚轮缩放 · 拖空白平移 · 点击方块查看详情 · 点方块左缘折叠/展开 · Esc 关闭</div>
 <aside id="panel"></aside>
 <script>
 'use strict';
 const $ = s => document.querySelector(s);
 let KB = '', GRAPH = null, byId = new Map(), TYPES = new Set(), COUNTS = {};
-let HIDDEN = new Set(), SEL = null, HOVER = null;
-const SETTINGS = {rep: 1, edge: 1};                       /* 视图调节：斥力倍数 / 线明度倍数 */
+let childrenMap = new Map(), roots = [], HIDDEN = new Set();
+let COLLAPSED = new Set(), EXPANDED = new Set();     /* 折叠 / 强制展开 */
+let SEL = null, HOVER = null;
+const SETTINGS = {col: 1, edge: 1};
+const COL_W = 210, ROW_H = 44, MAX_DEPTH = 2;        /* 世界单位；默认展开深度 */
 const VW = () => cv.clientWidth || window.innerWidth;
 const VH = () => cv.clientHeight || window.innerHeight;
 
@@ -286,7 +289,7 @@ function mdToHtml(md){
   return out.join('\n');
 }
 
-/* ---------------- 星图：力导向布局（零依赖） ---------------- */
+/* ---------------- 树状图：确定性布局（父左子右，无力导向） ---------------- */
 const cv = $('#graph'), ctx = cv.getContext('2d');
 const VIEW = {x: 0, y: 0, s: 1};
 const TYPE_COLOR = {
@@ -308,40 +311,98 @@ function nodeBox(n){  /* 方形文本框：尺寸由 name 文本决定（缓存�
   }
   return n._box;
 }
-function nodeRadius(n){ return Math.max(nodeBox(n).w, nodeBox(n).h) / 2; }
+function childrenOf(tid){ return childrenMap.get(tid) || []; }
+function kids(tid){ return childrenOf(tid).filter(c => !byId.get(c).hidden); }
+function isOpen(n, depth){ return kids(n.tid).length > 0 &&
+  !COLLAPSED.has(n.tid) && (EXPANDED.has(n.tid) || depth < MAX_DEPTH); }
+
+function layout(){
+  /* 森林式确定性布局：每个顶层节点一列（x=列号+深度×列宽），列内行号独立（y=列内叶子堆叠，父居中） */
+  roots.forEach((r, i) => {
+    let row = 0;                                    /* 每列独立行号 → 总高=最高列 */
+    const place = (tid, depth) => {
+      const n = byId.get(tid);
+      if (!n || n.hidden) return;
+      const open = isOpen(n, depth);
+      const ch = kids(tid);
+      n.x = (i + depth) * COL_W * SETTINGS.col;
+      if (!open){
+        n.y = row * ROW_H; row += 1;
+      } else {
+        const top = row;
+        for (const c of ch) place(c, depth + 1);
+        n.y = (top + row - 1) / 2 * ROW_H;
+      }
+      n.depth = depth; n.open = open;
+    };
+    place(r, 0);
+  });
+  /* 视口一次性适配（同步，无 rAF 竞态） */
+  let minX = 0, maxX = 0, minY = 0, maxY = 0, first = true;
+  for (const n of GRAPH.nodes){
+    if (n.hidden || n.y == null) continue;
+    const b = nodeBox(n), hw = b.w / 2, hh = b.h / 2;
+    if (first){ minX = n.x - hw; maxX = n.x + hw; minY = n.y - hh; maxY = n.y + hh; first = false; }
+    else {
+      if (n.x - hw < minX) minX = n.x - hw; if (n.x + hw > maxX) maxX = n.x + hw;
+      if (n.y - hh < minY) minY = n.y - hh; if (n.y + hh > maxY) maxY = n.y + hh;
+    }
+  }
+  const W = VW(), H = VH(), pad = 70;
+  const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
+  const s = Math.min((W - pad * 2) / bw, (H - pad * 2) / bh, 1.2);
+  VIEW.s = Math.max(0.15, s);
+  VIEW.x = W / 2 - (minX + maxX) / 2 * VIEW.s;
+  VIEW.y = H / 2 - (minY + maxY) / 2 * VIEW.s;
+}
 function resize(){
   const dpr = window.devicePixelRatio || 1;
   const w = VW(), h = VH();
   cv.width = w * dpr; cv.height = h * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
-window.addEventListener('resize', () => { resize(); if (GRAPH) fitView(); });
+window.addEventListener('resize', () => { resize(); if (GRAPH) draw(); });
 
 function draw(){
   const W = VW(), H = VH();
   ctx.clearRect(0, 0, W, H);
   const sx = x => x * VIEW.s + VIEW.x, sy = y => y * VIEW.s + VIEW.y;
+  const eA = SETTINGS.edge;
   const hoverSet = HOVER ? new Set([HOVER]) : null;
   if (HOVER){
-    const hn = byId.get(HOVER);
     for (const e of GRAPH.edges)
       if (e.s === HOVER) hoverSet.add(e.t); else if (e.t === HOVER) hoverSet.add(e.s);
   }
-  const eA = SETTINGS.edge;                    /* 线明度倍数 */
-  /* 边：ref 高亮，parent 弱化；悬停时只画相邻边 */
+  /* ref 转译引用：贝塞尔叠线 */
   for (const e of GRAPH.edges){
+    if (e.r !== 'r') continue;
     const a = byId.get(e.s), b = byId.get(e.t);
     if (!a || !b || a.hidden || b.hidden) continue;
     if (hoverSet && !hoverSet.has(e.s) && !hoverSet.has(e.t)) continue;
-    ctx.beginPath(); ctx.moveTo(sx(a.x), sy(a.y)); ctx.lineTo(sx(b.x), sy(b.y));
-    ctx.strokeStyle = e.r === 'p'
-      ? 'rgba(255,255,255,' + (0.06 * eA).toFixed(3) + ')'
-      : 'rgba(91,155,255,' + (0.26 * eA).toFixed(3) + ')';
+    const xa = sx(a.x), ya = sy(a.y), xb = sx(b.x), yb = sy(b.y);
+    ctx.beginPath();
+    ctx.moveTo(xa, ya);
+    ctx.quadraticCurveTo((xa + xb) / 2, (ya + yb) / 2 - 30, xb, yb);
+    ctx.strokeStyle = 'rgba(91,155,255,' + (0.20 * eA).toFixed(3) + ')';
     ctx.lineWidth = 1; ctx.stroke();
   }
-  /* 节点：方形文本框，深色底 + 类型色描边，名称在框内 */
+  /* parent 层级：直角连线（父右缘 → 子左缘） */
+  for (const e of GRAPH.edges){
+    if (e.r !== 'p') continue;
+    const a = byId.get(e.s), b = byId.get(e.t);
+    if (!a || !b || a.hidden || b.hidden || !a.open) continue;
+    const xa = sx(a.x) + nodeBox(a).w * VIEW.s / 2, ya = sy(a.y);
+    const xb = sx(b.x) - nodeBox(b).w * VIEW.s / 2, yb = sy(b.y);
+    const mx = (xa + xb) / 2;
+    ctx.beginPath();
+    ctx.moveTo(xa, ya); ctx.lineTo(mx, ya); ctx.lineTo(mx, yb); ctx.lineTo(xb, yb);
+    ctx.strokeStyle = hoverSet && !hoverSet.has(e.s) && !hoverSet.has(e.t)
+      ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,' + (0.10 * eA).toFixed(3) + ')';
+    ctx.lineWidth = 1; ctx.stroke();
+  }
+  /* 节点：方形文本框，深色底 + 类型色描边，name 在框内 */
   for (const n of GRAPH.nodes){
-    if (n.hidden) continue;
+    if (n.hidden || n.y == null) continue;
     const box = nodeBox(n);
     const x = sx(n.x), y = sy(n.y);
     const hw = box.w * VIEW.s / 2, hh = box.h * VIEW.s / 2;
@@ -362,113 +423,34 @@ function draw(){
     ctx.stroke();
     ctx.globalAlpha = 1;
     const fs = 12 * VIEW.s;                      /* 文本字号随缩放同步变化 */
-    if (fs >= 6){                                /* 框内显示 name（上限 50 字符） */
+    if (fs >= 5){
+      const label = trunc(n.name || n.tid, 50);
+      const lw = ctx.measureText(label).width;
       ctx.fillStyle = n.tid === SEL ? '#fff' : '#d7dde6';
       ctx.font = fs + 'px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(trunc(n.name || n.tid, 50), x, y);
+      ctx.fillText(label, x, y);
+      /* 折叠指示器（有子节点时，方块左缘画三角） */
+      if (kids(n.tid).length > 0 && hw > 8){
+        ctx.fillStyle = n.open ? '#ffd166' : 'rgba(123,132,148,.9)';
+        ctx.beginPath();
+        const cx = x - hw + 5, cy = y;
+        if (n.open){
+          ctx.moveTo(cx - 2, cy - 3); ctx.lineTo(cx + 3, cy); ctx.lineTo(cx - 2, cy + 3);
+        } else {
+          ctx.moveTo(cx - 2, cy - 3); ctx.lineTo(cx - 2, cy + 3); ctx.lineTo(cx + 3, cy);
+        }
+        ctx.closePath(); ctx.fill();
+      }
     }
   }
 }
 
-/* 力导向模拟：网格近似斥力 + 弹簧 + 弱向心，冷却后静止。
-   力/速度/坐标全程钳制，防止密集图（500+ 节点）下弹簧力导致坐标发散飞出画布。 */
-function runSim(){
-  const ns = GRAPH.nodes.filter(n => !n.hidden);
-  if (!ns.length){ draw(); return; }
-  const byId2 = new Map(ns.map(n => [n.tid, n]));
-  for (const n of ns) if (n.x == null){ n.x = (Math.random() - 0.5) * 900; n.y = (Math.random() - 0.5) * 600; }
-  const edges = GRAPH.edges.filter(e => byId2.has(e.s) && byId2.has(e.t));
-  const CELL = 180, REP = 4200 * SETTINGS.rep, K = 0.9, GRAV = 0.02;
-  const SPR_P = 120, SPR_R = 200, FMAX = 90, VMAX = 30, BOUND = 8000;
-  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-  let alpha = 1;
-  const done = () => { cancelAnimationFrame(runSim._ra); fitView(); };
-  function tick(){
-    try{
-    const grid = new Map();
-    for (const n of ns){
-      const key = Math.floor(n.x / CELL) + ',' + Math.floor(n.y / CELL);
-      if (!grid.has(key)) grid.set(key, []);
-      grid.get(key).push(n);
-    }
-    for (const n of ns){                        /* 斥力 + 盒子碰撞推出 */
-      let fx = 0, fy = 0;
-      const bx = Math.floor(n.x / CELL), by = Math.floor(n.y / CELL);
-      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++){
-        const cells = grid.get((bx + dx) + ',' + (by + dy));
-        if (!cells) continue;
-        for (const m of cells){
-          if (m === n) continue;
-          let ddx = n.x - m.x, ddy = n.y - m.y;
-          let d2 = ddx * ddx + ddy * ddy;
-          if (d2 < 1) d2 = 1;
-          if (d2 > CELL * CELL * 2.5) continue;
-          const d = Math.sqrt(d2);
-          const rsum = nodeRadius(n) + nodeRadius(m);
-          const f = d < rsum ? 500 / d : REP / d2;   /* 重叠时强推，否则常规斥力 */
-          fx += ddx / d * f; fy += ddy / d * f;
-        }
-      }
-      n.fx = clamp(fx, -FMAX, FMAX); n.fy = clamp(fy, -FMAX, FMAX);
-    }
-    for (const e of edges){                      /* 弹簧（力同样钳制） */
-      const a = byId2.get(e.s), b = byId2.get(e.t);
-      const dx = b.x - a.x, dy = b.y - a.y;
-      const d = Math.max(1, Math.hypot(dx, dy));
-      const target = e.r === 'p' ? SPR_P : SPR_R;
-      const f = clamp((d - target) * K, -FMAX, FMAX) * alpha;
-      const ux = dx / d, uy = dy / d;
-      a.fx += ux * f; a.fy += uy * f;
-      b.fx -= ux * f; b.fy -= uy * f;
-    }
-    for (const n of ns){                         /* 积分 + 弱向心 + 位置界 */
-      n.fx = clamp(n.fx - n.x * GRAV, -FMAX, FMAX);
-      n.fy = clamp(n.fy - n.y * GRAV, -FMAX, FMAX);
-      const vx = n.vx || 0, vy = n.vy || 0;
-      n.vx = clamp((vx + n.fx * alpha) * 0.8, -VMAX, VMAX);
-      n.vy = clamp((vy + n.fy * alpha) * 0.8, -VMAX, VMAX);
-      n.x = clamp(n.x + n.vx, -BOUND, BOUND);
-      n.y = clamp(n.y + n.vy, -BOUND, BOUND);
-    }
-    alpha *= 0.99;
-    draw();
-    if (alpha > 0.02) requestAnimationFrame(tick);
-    else done();
-    }catch(err){ done(); }                        /* 异常不中断：至少完成一次 fitView */
-  }
-  cancelAnimationFrame(runSim._ra);
-  runSim._ra = requestAnimationFrame(tick);
-}
-function fitView(){
-  const ns = GRAPH.nodes.filter(n => !n.hidden && n.x != null);
-  if (!ns.length) return;
-  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
-  for (const n of ns){
-    const r = nodeRadius(n);
-    if (n.x - r < minX) minX = n.x - r; if (n.x + r > maxX) maxX = n.x + r;
-    if (n.y - r < minY) minY = n.y - r; if (n.y + r > maxY) maxY = n.y + r;
-  }
-  const W = VW(), H = VH(), pad = 60;
-  const bw = Math.max(1, maxX - minX), bh = Math.max(1, maxY - minY);
-  const s = Math.min((W - pad * 2) / bw, (H - pad * 2) / bh, 1.6);
-  VIEW.s = Math.max(0.25, s);
-  VIEW.x = W / 2 - (minX + maxX) / 2 * VIEW.s;
-  VIEW.y = H / 2 - (minY + maxY) / 2 * VIEW.s;
-  draw();
-}
-function centerView(tid){
-  const n = byId.get(tid);
-  if (n && n.x != null){
-    VIEW.x = VW() / 2 - n.x * VIEW.s;
-    VIEW.y = VH() / 2 - n.y * VIEW.s;
-    draw();
-  }
-}
+/* ---------------- 交互：缩放 / 平移 / 点击 ---------------- */
 function nodeAt(px, py){
   for (const n of GRAPH.nodes){
-    if (n.hidden || n.x == null) continue;
+    if (n.hidden || n.y == null) continue;
     const box = nodeBox(n);
     const x = n.x * VIEW.s + VIEW.x, y = n.y * VIEW.s + VIEW.y;
     const hw = box.w * VIEW.s / 2 + 2, hh = box.h * VIEW.s / 2 + 2;
@@ -485,18 +467,13 @@ cv.addEventListener('pointerdown', e => {
   cv.setPointerCapture(e.pointerId);
   const p = pos(e), n = nodeAt(p.x, p.y);
   drag = n
-    ? {type: 'node', tid: n.tid, px: p.x, py: p.y, nx: n.x, ny: n.y}
+    ? {type: 'node', tid: n.tid, px: p.x, py: p.y}
     : {type: 'pan', px: p.x, py: p.y, ox: VIEW.x, oy: VIEW.y};
 });
 cv.addEventListener('pointermove', e => {
   const p = pos(e);
   if (drag){
-    if (drag.type === 'node'){
-      const n = byId.get(drag.tid);
-      n.x = drag.nx + (p.x - drag.px) / VIEW.s;
-      n.y = drag.ny + (p.y - drag.py) / VIEW.s;
-      draw();
-    } else {
+    if (drag.type === 'pan'){
       VIEW.x = drag.ox + (p.x - drag.px);
       VIEW.y = drag.oy + (p.y - drag.py);
       draw();
@@ -513,8 +490,17 @@ cv.addEventListener('pointerup', e => {
   drag = null;
   if (was && was.type === 'node'){
     const n = byId.get(was.tid);
-    const moved = Math.hypot((p.x - was.px) / VIEW.s, (p.y - was.py) / VIEW.s) > 3;
-    if (!moved) openNode(n.tid);
+    const moved = Math.hypot(p.x - was.px, p.y - was.py) > 4;
+    if (!moved){
+      const box = nodeBox(n);
+      const x = n.x * VIEW.s + VIEW.x;
+      const hw = box.w * VIEW.s / 2;
+      if (kids(n.tid).length > 0 && p.x < x - hw + 12 * VIEW.s){   /* 左缘：折叠/展开 */
+        toggleNode(n.tid);
+      } else {
+        openNode(n.tid);
+      }
+    }
   }
 });
 cv.addEventListener('wheel', e => {
@@ -524,12 +510,25 @@ cv.addEventListener('wheel', e => {
   const k = ns / VIEW.s;
   VIEW.x = p.x - (p.x - VIEW.x) * k;
   VIEW.y = p.y - (p.y - VIEW.y) * k;
-  VIEW.s = Math.min(2.5, Math.max(0.2, ns));
+  VIEW.s = Math.min(2.5, Math.max(0.1, ns));
   draw();
 }, {passive: false});
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closePanel(); });
+function toggleNode(tid){
+  if (COLLAPSED.has(tid)){ COLLAPSED.delete(tid); EXPANDED.add(tid); }
+  else { COLLAPSED.add(tid); EXPANDED.delete(tid); }
+  layout(); draw();
+}
+function centerView(tid){
+  const n = byId.get(tid);
+  if (n && n.y != null){
+    VIEW.x = VW() / 2 - n.x * VIEW.s;
+    VIEW.y = VH() / 2 - n.y * VIEW.s;
+    draw();
+  }
+}
 
-/* ---------------- 类型快捷筛选 ---------------- */
+/* ---------------- 类型筛选 / 视图调节 ---------------- */
 function buildFilters(){
   const types = Array.from(TYPES).sort();
   $('#filters').innerHTML = '';
@@ -550,15 +549,13 @@ function buildFilters(){
 function applyVis(){
   for (const n of GRAPH.nodes) n.hidden = HIDDEN.has(n.type);
   if (SEL){ const n = byId.get(SEL); if (n && n.hidden) closePanel(); }
-  runSim();
+  layout(); draw();
 }
-
-/* ---------------- 视图调节滑杆 ---------------- */
 function wireControls(){
-  $('#sl-rep').addEventListener('input', e => {
-    SETTINGS.rep = e.target.value / 100;
-    $('#rep-val').textContent = e.target.value + '%';
-    runSim();
+  $('#sl-col').addEventListener('input', e => {
+    SETTINGS.col = e.target.value / 100;
+    $('#col-val').textContent = e.target.value + '%';
+    layout(); draw();
   });
   $('#sl-edge').addEventListener('input', e => {
     SETTINGS.edge = e.target.value / 100;
@@ -680,17 +677,25 @@ async function loadLib(){
   const g = await api('/api/graph', {kb: KB});
   GRAPH = g;
   byId = new Map(g.nodes.map(n => [n.tid, n]));
+  childrenMap = new Map();
+  const childSet = new Set();
+  for (const e of g.edges) if (e.r === 'p'){
+    if (!childrenMap.has(e.s)) childrenMap.set(e.s, []);
+    childrenMap.get(e.s).push(e.t);
+    childSet.add(e.t);
+  }
+  roots = g.nodes.filter(n => !childSet.has(n.tid)).map(n => n.tid);   /* 顶层 = 非任何父边的子节点 */
   TYPES = new Set(); COUNTS = {};
   for (const n of g.nodes){
     TYPES.add(n.type);
     COUNTS[n.type] = (COUNTS[n.type] || 0) + 1;
   }
   $('#count').textContent = g.nodes.length + ' 节点 · ' + g.edges.length + ' 边';
-  HIDDEN = new Set(); SEL = null;
+  HIDDEN = new Set(); SEL = null; COLLAPSED = new Set(); EXPANDED = new Set();
   buildFilters();
   loadTree();
-  applyVis();
-  setTimeout(() => { if (GRAPH) fitView(); }, 1500);   /* 兜底：模拟未冷却也先适配一次视口 */
+  layout();
+  draw();
 }
 async function init(){
   const libs = await api('/api/list');
@@ -743,7 +748,7 @@ def _tree(nodes: dict, tid: str = "root") -> dict:
 
 
 def _graph(nodes: dict) -> dict:
-    """星图数据：节点（不含 root）+ 边。边两类：parent=层级（s=父 t=子）；ref=转译引用（s=引用方 t=被引用方）。"""
+    """树图数据：节点（不含 root）+ 边。边两类：parent=层级（s=父 t=子）；ref=转译引用（s=引用方 t=被引用方）。"""
     g_nodes = []
     for tid, n in nodes.items():
         if tid == "root":
@@ -850,7 +855,7 @@ def main(host: str = "127.0.0.1", port: int = 8666) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     httpd = ThreadingHTTPServer((host, port), _Handler)
-    print(f"NodeKB WebUI（只读星图，md 即库无编辑）→ http://{host}:{port}/  Ctrl+C 退出", flush=True)
+    print(f"NodeKB WebUI（只读树状图，md 即库无编辑）→ http://{host}:{port}/  Ctrl+C 退出", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
