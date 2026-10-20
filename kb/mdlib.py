@@ -97,7 +97,7 @@ def parse_file(path: Path, file_tid: str, folder_type: str, parent_tid: str) -> 
             if line.strip() == "</node>":
                 stack.pop()
                 continue
-            if "<node" in line:  # 内层 <node>（须单行闭合）
+            if line.lstrip().startswith("<node"):  # 内层 <node>（须单行闭合；只认行首，正文里提到 <node> 不算）
                 attrs = dict(ATTR_RE.findall(line))
                 name = attrs.get("name", "").strip()
                 if name:

@@ -39,7 +39,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--kb", default=None)
     p.add_argument("--lib", default=None)
 
-    p = sub.add_parser("diag", help="自检：悬空/循环引用、树完整性、类型清单")
+    p = sub.add_parser("diag", help="自检：悬空/循环引用、树完整性、类型清单（漂移默认只报警告）")
+    p.add_argument("--strict", action="store_true", help="严格模式：重复块/重复行也视为失败")
     p.add_argument("--kb", default=None)
     p.add_argument("--lib", default=None)
 
@@ -115,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
                                              limit=args.limit, as_json=args.json,
                                              offset=args.offset, snippet=args.snippet)
         elif args.command == "diag":
-            text, code = commands.cmd_diag(nodes, problems)
+            text, code = commands.cmd_diag(nodes, problems, strict=args.strict)
         elif args.command == "dump":
             text, code = commands.cmd_dump(nodes, args.out)
         else:

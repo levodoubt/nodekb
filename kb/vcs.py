@@ -25,9 +25,11 @@ def git_available() -> bool:
 
 def _run(nodekb_dir: str, *args) -> subprocess.CompletedProcess | None:
     try:
+        # 显式 utf-8：git 提交信息里可能有中文，默认按 locale(GBK) 解码会在读线程抛错，
+        # 导致 stdout 变成 None（kb_vcs_status 报 'NoneType' object has no attribute 'strip'）。
         return subprocess.run(
             ["git", "-C", nodekb_dir, *args],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -45,7 +47,7 @@ def is_repo(nodekb_dir: str) -> bool:
 
 def _porcelain(nodekb_dir: str) -> list[str]:
     r = _run(nodekb_dir, "status", "--porcelain")
-    return [l for l in (r.stdout.splitlines() if _ok(r) else []) if l.strip()]
+    return [l for l in ((r.stdout or "").splitlines() if _ok(r) else []) if l.strip()]
 
 
 def init(nodekb_dir: str) -> str:
@@ -69,7 +71,7 @@ def status(nodekb_dir: str) -> dict:
     if not git_available() or not is_repo(nodekb_dir):
         return {"repo": False, "error": "非 git 仓库（kb vcs init 或 register 后自动初始化）"}
     r = _run(nodekb_dir, "log", "-1", "--pretty=%h %ad %s", "--date=short")
-    last = r.stdout.strip() if _ok(r) else "（无提交）"
+    last = ((r.stdout or "").strip() or "（无提交）") if _ok(r) else "（无提交）"
     lines = _porcelain(nodekb_dir)
     kinds: dict[str, int] = {}
     for l in lines:

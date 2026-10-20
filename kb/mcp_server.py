@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 from typing import Optional
 
 from . import commands
@@ -63,11 +64,12 @@ def _tools() -> list[dict]:
         },
         {
             "name": "kb_diag",
-            "description": "自检：悬空引用、循环引用、树完整性、节点类型清单。目标库：kb 或 srcs。",
+            "description": "自检：悬空/位置型引用、循环引用、树完整性、类型清单。errors 是真损坏（退出非零）；warnings 是疑似内容漂移（共用样板块已自动忽略，库根 diag_ignore.json 可再加本地豁免），默认不影响退出码，strict=true 时才算失败。目标库：kb 或 srcs。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "kb": {"type": "string"},
+                    "strict": {"type": "boolean", "description": "严格模式：把漂移 warning 也视为失败（默认 false）"},
                 },
             },
         },
@@ -136,7 +138,14 @@ def _call_tool(params: dict) -> dict:
         elif name == "kb_diag":
             problems: list = []
             nodes = commands.load_library(args.get("kb"), None, problems)
-            text, code = commands.cmd_diag(nodes, problems)
+            try:
+                lib_root = commands.lib_dir_of(args.get("kb"), None)
+            except (KeyError, ValueError):
+                lib_root = None
+            text, code = commands.cmd_diag(
+                nodes, problems, strict=bool(args.get("strict", False)),
+                lib_root=Path(lib_root) if lib_root else None,
+            )
         elif name == "kb_vcs_init":
             text, code = commands.cmd_vcs(args.get("kb"), None, "init")
         elif name == "kb_vcs_status":

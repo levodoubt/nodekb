@@ -263,16 +263,100 @@ def cmd_search(
 
 _POSITIONAL_SEG = re.compile(r"^\d+(\.\d+)*$")
 _DUP_MIN_LEN = 40  # 视为漂移候选的文本块最短长度
+_DUP_NAV_ALNUM = 24  # 去掉链接/URL 后实义字符少于此值 → 导航/出处样板
+_IGNORE_FILE = "diag_ignore.json"  # 库根的本地豁免（不进代码）：{"blocks": ["正则"], "lines": ["正则"]}
+_URL_RE = re.compile(r"https?://\S+")
+_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_REF_RE = re.compile(r"\[\[[^\]]*\]\]")
+_ALNUM_RE = re.compile(r"[\w\u4e00-\u9fff]")
+_BULLET_RE = re.compile(r"^(?:[-*+]\s+|\d+[.)]\s+)")
 
 
-def _dup_blocks(nodes: dict[str, dict]) -> list[str]:
-    """内容漂移：物理重复的文本块（同一段文字出现在 2+ 节点，且不是转译引用）。"""
+def _lib_root_of(nodes: dict[str, dict]) -> Optional[Path]:
+    """从节点 source 反查库根（.nodekb 目录），用于读本地豁免文件。"""
+    for n in nodes.values():
+        src = (n.get("source") or "").split("#")[0]
+        if not src:
+            continue
+        for parent in Path(src).parents:
+            if parent.name == ".nodekb":
+                return parent
+    return None
+
+
+def _compile_rules(items) -> list:
+    out = []
+    for item in items or []:
+        try:
+            out.append(re.compile(str(item)))
+        except re.error:
+            continue
+    return out
+
+
+def _load_ignore(lib_root: Optional[Path]) -> tuple[list, list]:
+    """读库根的 diag_ignore.json：{"blocks": [...], "lines": [...]}，两项都是正则列表。"""
+    if lib_root is None:
+        return [], []
+    path = lib_root / _IGNORE_FILE
+    if not path.is_file():
+        return [], []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return [], []
+    if not isinstance(data, dict):
+        return [], []
+    return _compile_rules(data.get("blocks")), _compile_rules(data.get("lines"))
+
+
+def _norm(blk: str) -> str:
+    return " ".join(blk.split())
+
+
+def _is_boilerplate(blk: str) -> bool:
+    """样板判定：导航/出处注记、纯链接、URL、HTML 碎片、参数块。
+
+    这些块跨页面「重复」是设计使然（上级索引行、官方推荐参数原样搬运、模型卡同作者声明），
+    一旦当成漂移上报，健康检查就长期变红、随后被无视——比不检查更糟。
+    """
+    s = blk.strip()
+    if not s:
+        return True
+    lines = [ln.strip() for ln in s.splitlines() if ln.strip()]
+    # 引用块先剥掉「>」行（导航/出处注记），再看剩下是否还有实质内容
+    body = [ln for ln in lines if not ln.startswith(">")]
+    if not body:
+        return True  # 整块都是引用注记（上级索引 / 出处说明 / 例图指引），不是正文
+    core = body
+    first = core[0].lstrip("*_> ").strip()
+    if first.startswith("<"):
+        return True  # HTML 碎片
+    if _URL_RE.fullmatch(first):
+        return True  # 裸 URL 行
+    joined = "\n".join(core)
+    # 导航块里链接文本本身就是文件名，不能算「内容」：整段链接先剔除再计实义字符
+    stripped = _REF_RE.sub("", _MD_LINK_RE.sub("", _URL_RE.sub("", joined)))
+    if len(_ALNUM_RE.findall(stripped)) < _DUP_NAV_ALNUM:
+        return True  # 去掉链接后几乎没内容
+    if all(_BULLET_RE.match(ln) or ln.startswith("|") for ln in core) and not any(
+        c in joined for c in "。，"
+    ):
+        return True  # 整块都是列表项/表格行且无叙述句（参数块）
+    return False
+
+
+def _dup_blocks(nodes: dict[str, dict], ignore: list = ()) -> list[str]:
+    """内容漂移：物理重复的文本块（同一段文字出现在 2+ 节点，且不是转译引用 / 样板）。"""
     by_block: dict[str, list[str]] = {}
     for n in nodes.values():
         for blk in re.split(r"\n\s*\n", n["content"]):
-            b = " ".join(blk.split())
-            if len(b) >= _DUP_MIN_LEN:
-                by_block.setdefault(b, []).append(n["tid"])
+            b = _norm(blk)
+            if len(b) < _DUP_MIN_LEN or _is_boilerplate(blk):
+                continue
+            if any(rx.search(b) for rx in ignore):
+                continue
+            by_block.setdefault(b, []).append(n["tid"])
     out = []
     for b, tids in by_block.items():
         uniq = sorted(set(tids))
@@ -281,10 +365,10 @@ def _dup_blocks(nodes: dict[str, dict]) -> list[str]:
     return out[:20]
 
 
-def _intra_dup_lines(nodes: dict[str, dict]) -> list[str]:
-    """节点内重复行：同一节点里 ≥40 字符的正文/命令行出现 2+ 次（整段拷贝的漂移源）。
+def _intra_dup_lines(nodes: dict[str, dict], ignore: list = ()) -> list[str]:
+    """节点内重复行：同一节点里 ≥40 字符的正文行出现 2+ 次（整段拷贝的漂移源）。
 
-    跳过代码围栏内行（copy-ready 块可有意重复）、表格行、纯符号行，避免误报。
+    跳过代码围栏内行（copy-ready 块可有意重复）、表格行、纯符号行、样板行，避免误报。
     """
     out = []
     for n in nodes.values():
@@ -298,6 +382,8 @@ def _intra_dup_lines(nodes: dict[str, dict]) -> list[str]:
             if fenced or s.startswith("|") or not s:
                 continue
             if len(s) >= 40 and any(c.isalnum() for c in s):
+                if _is_boilerplate(s) or any(rx.search(s) for rx in ignore):
+                    continue
                 counts[s] = counts.get(s, 0) + 1
         for s, c in counts.items():
             if c >= 2:
@@ -306,33 +392,50 @@ def _intra_dup_lines(nodes: dict[str, dict]) -> list[str]:
     return out[:20]
 
 
-def cmd_diag(nodes: dict[str, dict], problems: Optional[list] = None) -> tuple[str, int]:
-    problems = list(problems or [])
+def cmd_diag(
+    nodes: dict[str, dict],
+    problems: Optional[list] = None,
+    strict: bool = False,
+    lib_root: Optional[Path] = None,
+) -> tuple[str, int]:
+    """自检。
+
+    errors  = 真损坏（悬空/位置型引用、循环、孤儿、重复 TID）→ 退出码 2。
+    warnings = 疑似漂移（重复块 / 节点内重复行），默认不影响退出码；
+               需要零容忍时用 strict=True（CLI `--strict`）把它们也升为失败。
+    """
+    errors = list(problems or [])
     for node in nodes.values():
         for ref_tid in parse.extract_refs(node["content"]):
             if ref_tid not in nodes:
-                problems.append(f"悬空引用: {node['tid']} → [[{ref_tid}]]")
+                errors.append(f"悬空引用: {node['tid']} → [[{ref_tid}]]")
             elif len(ref_tid.split(":")) >= 3 and _POSITIONAL_SEG.match(ref_tid.split(":")[-1]):
                 # 位置型段落 TID（文件:序号）：插章节就漂移，禁止作为引用目标
-                problems.append(f"位置型 TID 引用（插章节会漂移）: {node['tid']} → [[{ref_tid}]]")
+                errors.append(f"位置型 TID 引用（插章节会漂移）: {node['tid']} → [[{ref_tid}]]")
     for tid in nodes:
         try:
             render.render_node(nodes, tid)
         except render.TransclusionError as e:
-            problems.append(f"循环引用 @{tid}: {e}")
+            errors.append(f"循环引用 @{tid}: {e}")
     for node in nodes.values():
         if node["parent_tid"] is not None and node["parent_tid"] not in nodes:
-            problems.append(f"孤儿节点: {node['tid']} (父 {node['parent_tid']} 不存在)")
-    _detect_tree_cycles(nodes, problems)
-    problems.extend(_dup_blocks(nodes))
-    problems.extend(_intra_dup_lines(nodes))
-    code = 2 if problems else 0
+            errors.append(f"孤儿节点: {node['tid']} (父 {node['parent_tid']} 不存在)")
+    _detect_tree_cycles(nodes, errors)
+
+    root = lib_root or _lib_root_of(nodes)
+    ignore_blocks, ignore_lines = _load_ignore(root)
+    warnings = _dup_blocks(nodes, ignore_blocks) + _intra_dup_lines(nodes, ignore_lines)
+
+    code = 2 if errors or (strict and warnings) else 0
     report = {
         "exit_code": code,
-        "errors": problems,
+        "errors": errors,
+        "warnings": warnings,
         "node_count": len(nodes),
         "types": _type_counts(nodes),
     }
+    if not errors and not warnings:
+        report["status"] = "ok"
     return json.dumps(report, ensure_ascii=False, indent=2), code
 
 

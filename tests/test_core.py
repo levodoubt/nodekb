@@ -220,9 +220,34 @@ class TestFixes(unittest.TestCase):
         blk = "这是完全相同的长文本块用于漂移检测，必须超过四十个字符才会被记录并上报，请勿删改。"
         tmp = make_lib({"01.md": "## 1\n\n" + blk + "\n", "02.md": "## 2\n\n" + blk + "\n"})
         nodes = parse(tmp)
-        out, code = commands.cmd_diag(nodes)
+        out, code = commands.cmd_diag(nodes)  # 默认：漂移只是 warning，不算失败
+        self.assertEqual(code, 0)
+        self.assertIn("内容重复", out)
+        self.assertIn("warnings", out)
+        out, code = commands.cmd_diag(nodes, strict=True)  # 严格模式：升为失败
         self.assertEqual(code, 2)
         self.assertIn("内容重复", out)
+
+    def test_diag_ignores_shared_boilerplate(self):  # E18：共用样板块不报漂移
+        nav = "> 上级索引：[README.md](../README.md) ｜ 简介原文：[intro.md](intro.md)"
+        params = "- KSampler: sampler=['36', 0] scheduler=sgm_uniform steps=50 cfg=6.0"
+        tmp = make_lib({
+            "01.md": "## 1\n\n" + nav + "\n\n" + params + "\n\n真正的正文第一段，足够长以便对比。\n",
+            "02.md": "## 2\n\n" + nav + "\n\n" + params + "\n\n另一段正文。\n",
+        })
+        out, code = commands.cmd_diag(parse(tmp))
+        self.assertEqual(code, 0)
+        self.assertNotIn("内容重复", out)
+        self.assertIn('"status": "ok"', out)
+
+    def test_diag_ignore_file(self):  # E19：库根 diag_ignore.json 提供本地豁免
+        blk = "这段文字在两个节点里都一样，但属于有意复制的共用说明，需要本地豁免才不报警，长度够四十字符。"
+        tmp = make_lib({"01.md": "## 1\n\n" + blk + "\n", "02.md": "## 2\n\n" + blk + "\n"})
+        Path(tmp, ".nodekb", "diag_ignore.json").write_text(
+            json.dumps({"blocks": ["属于有意复制的共用说明"]}, ensure_ascii=False), encoding="utf-8")
+        out, code = commands.cmd_diag(parse(tmp), strict=True)
+        self.assertEqual(code, 0)
+        self.assertNotIn("内容重复", out)
 
     def test_cycle_error_has_source(self):  # C8
         tmp = make_lib({"a.md": "<node name=\"a\">见 [[b]]</node>\n", "b.md": "<node name=\"b\">见 [[a]]</node>\n"})
@@ -288,7 +313,10 @@ class TestFixes(unittest.TestCase):
         ln = "这条命令行内容足够长，超过四十个字符，用于测试节点内部重复行的漂移检测必须达标。"
         tmp = make_lib({"01.md": "## 1\n\n" + ln + "\n" + ln + "\n"})
         nodes = parse(tmp)
-        out, code = commands.cmd_diag(nodes)
+        out, code = commands.cmd_diag(nodes)  # 默认只报 warning
+        self.assertEqual(code, 0)
+        self.assertIn("节点内重复行", out)
+        out, code = commands.cmd_diag(nodes, strict=True)  # 严格模式才算失败
         self.assertEqual(code, 2)
         self.assertIn("节点内重复行", out)
 
