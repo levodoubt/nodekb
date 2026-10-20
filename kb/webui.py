@@ -315,7 +315,7 @@ function resize(){
   cv.width = w * dpr; cv.height = h * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
-window.addEventListener('resize', () => { resize(); draw(); });
+window.addEventListener('resize', () => { resize(); if (GRAPH) fitView(); });
 
 function draw(){
   const W = VW(), H = VH();
@@ -361,12 +361,13 @@ function draw(){
     ctx.lineWidth = n.tid === SEL ? 2.5 : 1.4;
     ctx.stroke();
     ctx.globalAlpha = 1;
-    if (box.w * VIEW.s > 18){                    /* 框内显示 name（上限 50 字符） */
+    const fs = 12 * VIEW.s;                      /* 文本字号随缩放同步变化 */
+    if (fs >= 6){                                /* 框内显示 name（上限 50 字符） */
       ctx.fillStyle = n.tid === SEL ? '#fff' : '#d7dde6';
-      ctx.font = '12px sans-serif';
+      ctx.font = fs + 'px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(trunc(n.name || n.tid, 50), x, y + 0.5);
+      ctx.fillText(trunc(n.name || n.tid, 50), x, y);
     }
   }
 }
@@ -383,7 +384,9 @@ function runSim(){
   const SPR_P = 120, SPR_R = 200, FMAX = 90, VMAX = 30, BOUND = 8000;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   let alpha = 1;
+  const done = () => { cancelAnimationFrame(runSim._ra); fitView(); };
   function tick(){
+    try{
     const grid = new Map();
     for (const n of ns){
       const key = Math.floor(n.x / CELL) + ',' + Math.floor(n.y / CELL);
@@ -432,7 +435,8 @@ function runSim(){
     alpha *= 0.99;
     draw();
     if (alpha > 0.02) requestAnimationFrame(tick);
-    else fitView();
+    else done();
+    }catch(err){ done(); }                        /* 异常不中断：至少完成一次 fitView */
   }
   cancelAnimationFrame(runSim._ra);
   runSim._ra = requestAnimationFrame(tick);
@@ -686,6 +690,7 @@ async function loadLib(){
   buildFilters();
   loadTree();
   applyVis();
+  setTimeout(() => { if (GRAPH) fitView(); }, 1500);   /* 兜底：模拟未冷却也先适配一次视口 */
 }
 async function init(){
   const libs = await api('/api/list');
