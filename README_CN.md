@@ -2,7 +2,7 @@
 
 **Markdown 文件就是资料库。** NodeKB 把一个 Markdown 目录解析成可寻址的节点图：没有数据库、没有同步步骤、没有第二份状态。它向 Agent（MCP）与人类（CLI + 零依赖本地 WebUI）提供 `read / search / diag` 三个接口。
 
-[English](README.md)
+> [English](README.md) | 简体中文
 
 ---
 
@@ -150,4 +150,4 @@ python -m unittest discover -s tests
 
 ## 许可
 
-[MIT](LICENSE) © 2026 levodoubt
+[MIT](LICENSE)
