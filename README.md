@@ -32,8 +32,9 @@ python -m kb read <tid> [--node] [--toc] [--raw] [--json] [--kb N | --lib 技能
 python -m kb search <query> [--type T] [--limit N] [--json] [--kb N | --lib …]
 python -m kb diag [--kb N | --lib …]
 python -m kb dump --out <dir> [--kb N | --lib …]
-python -m kb register <name> <技能目录>    # 自动创建 .nodekb 库根
+python -m kb register <name> <技能目录>    # 自动创建 .nodekb 库根 + 初始化内嵌 git
 python -m kb list
+python -m kb vcs init|status|commit [--msg …] [--kb N | --lib …]   # 版本控制
 python -m kb webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 ```
 
@@ -57,7 +58,15 @@ python -m kb webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 }
 ```
 
-四工具：`kb_list` / `kb_read` / `kb_search` / `kb_diag`（无 edit——写文档 = 原生 write/edit）。Agent 典型流程：`kb_list` → `kb_search(kb=库名, query)` → `kb_read(kb=库名, target=tid)`。
+六工具：`kb_list` / `kb_read` / `kb_search` / `kb_diag` / `kb_vcs_init` / `kb_vcs_status`（无 edit——写文档 = 原生 write/edit）。Agent 典型流程：`kb_list` → `kb_search(kb=库名, query)` → `kb_read(kb=库名, target=tid)`；改动自动快照见下。
+
+## 版本控制（内嵌 git，自动快照）
+
+- **仓库根 = `.nodekb/` 自身**：只版本化知识库，不碰技能目录其它文件；`.git` 目录解析时自动跳过。
+- **初始化**：`kb register` 自动完成；既有库执行一次 `kb vcs init`（或 MCP `kb_vcs_init`）即可。
+- **自动快照**：每次读取/检索/自检后，若仓库有变更则自动 `commit`（消息 `autosnap: N 处变更`）——Agent 改完 md，下一次读取即落盘，无需手动 git。
+- **手动**：`kb vcs status`（最近提交/待提交变更）、`kb vcs commit --msg …`（有意义的提交信息）。
+- git 缺失时全部静默跳过，只读功能不受影响。既有库（minecraft/comfyui/filmmeasure）已初始化。
 
 ## WebUI（人类只读界面）
 
@@ -88,6 +97,7 @@ nodekb/
 │   ├── commands.py     read / search / diag / register / list / dump
 │   ├── mcp_server.py   MCP server（stdio，零依赖）
 │   ├── webui.py        只读本地 WebUI（http.server 零依赖）
+│   ├── vcs.py          .nodekb 内嵌 git（自动快照，零依赖）
 │   └── run_mcp.py      独立启动入口（不依赖 PYTHONPATH/cwd）
 └── tests/test_core.py
 ```

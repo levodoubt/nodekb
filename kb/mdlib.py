@@ -175,6 +175,7 @@ def parse_library(lib_dir: str, problems: Optional[list] = None) -> dict[str, di
         problems.append(f"重复 TID: {tid}（{what} 冲突，已跳过）")
 
     for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]  # 跳过 .git 等点目录，避免污染节点树
         d = Path(dirpath)
         rel = d.relative_to(root).parts
         folder_tid = _folder_tid(rel)

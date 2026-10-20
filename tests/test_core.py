@@ -292,6 +292,52 @@ class TestFixes(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("节点内重复行", out)
 
+    def test_parse_skips_dot_dirs(self):  # .git 等点目录不污染节点树
+        tmp = make_lib({"01.md": "# A\n"})
+        nodekb = Path(tmp) / ".nodekb"
+        (nodekb / ".git").mkdir()
+        (nodekb / ".git" / "x.md").write_text("# 不该出现\n", encoding="utf-8")
+        nodes = parse(tmp)
+        self.assertNotIn("git", nodes)
+        self.assertNotIn("git:x", nodes)
+
+
+@unittest.skipUnless(shutil.which("git"), "git 不可用")
+class TestVcs(unittest.TestCase):
+    """版本控制：.nodekb 内嵌 git + 自动快照。"""
+
+    def test_register_auto_inits_vcs(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
+        commands.register_db("t", str(tmp))
+        from kb import vcs
+        self.assertTrue(vcs.is_repo(str(tmp / ".nodekb")))
+
+    def test_autosnap_commits_change(self):
+        tmp = make_lib({"01.md": "# A\n"})
+        nodekb = str(Path(tmp) / ".nodekb")
+        from kb import vcs
+        vcs.init(nodekb)
+        (Path(tmp) / ".nodekb" / "doc" / "01.md").write_text("# A\n\n## 2\n\n新增。\n", encoding="utf-8")
+        nodes = commands.load_library(lib=str(tmp))  # 触发自动快照
+        self.assertIn("doc:01:2", nodes)
+        st = vcs.status(nodekb)
+        self.assertTrue(st["repo"])
+        self.assertFalse(st["dirty"])  # 已自动提交
+        self.assertIn("autosnap", st["last_commit"])
+
+    def test_vcs_status_and_commit(self):
+        tmp = make_lib({"01.md": "# A\n"})
+        nodekb = str(Path(tmp) / ".nodekb")
+        from kb import vcs
+        vcs.init(nodekb)
+        text, code = commands.cmd_vcs(None, str(tmp), "status")
+        self.assertEqual(code, 0)
+        self.assertIn("last_commit", text)
+        text, code = commands.cmd_vcs(None, str(tmp), "commit", msg="手动提交")
+        self.assertEqual(code, 0)
+        self.assertIn("无变更", text)
+
 
 if __name__ == "__main__":
     unittest.main()

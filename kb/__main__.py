@@ -59,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8666)
 
+    p = sub.add_parser("vcs", help="版本控制（.nodekb 内嵌 git）：init / status / commit")
+    p.add_argument("action", choices=["init", "status", "commit"])
+    p.add_argument("--msg", default=None, help="commit 的提交信息（缺省 kb commit）")
+    p.add_argument("--kb", default=None)
+    p.add_argument("--lib", default=None)
+
     return parser
 
 
@@ -94,6 +100,10 @@ def main(argv: list[str] | None = None) -> int:
             from . import webui
 
             return webui.main(host=args.host, port=args.port)
+        if args.command == "vcs":
+            text, code = commands.cmd_vcs(args.kb, args.lib, args.action, args.msg)
+            print(text)
+            return code
         problems: list = []
         nodes = _load(args, problems)
         if args.command == "read":

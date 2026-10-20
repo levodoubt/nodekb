@@ -71,6 +71,26 @@ def _tools() -> list[dict]:
                 },
             },
         },
+        {
+            "name": "kb_vcs_init",
+            "description": "初始化 .nodekb 内嵌 git 仓库（register 已自动做；既有库手动补一次即可，之后自动快照）。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "kb": {"type": "string"},
+                },
+            },
+        },
+        {
+            "name": "kb_vcs_status",
+            "description": "版本控制状态：仓库是否初始化、最近提交、待提交变更数。变更会在任意读取后自动提交（autosnap）。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "kb": {"type": "string"},
+                },
+            },
+        },
     ]
 
 
@@ -117,6 +137,10 @@ def _call_tool(params: dict) -> dict:
             problems: list = []
             nodes = commands.load_library(args.get("kb"), None, problems)
             text, code = commands.cmd_diag(nodes, problems)
+        elif name == "kb_vcs_init":
+            text, code = commands.cmd_vcs(args.get("kb"), None, "init")
+        elif name == "kb_vcs_status":
+            text, code = commands.cmd_vcs(args.get("kb"), None, "status")
         else:
             return {"result": {"content": [{"type": "text", "text": f"未知工具: {name}"}], "isError": True}}
         return {"result": {"content": [{"type": "text", "text": text}], "isError": code != 0}}

@@ -64,8 +64,9 @@ read <tid> [--node] [--toc] [--raw] [--json] [--kb N | --lib 技能目录或.nod
 search <query> [--type T] [--limit N] [--json] [--kb N | --lib …]
 diag [--json] [--kb N | --lib …]
 dump --out <dir> [--kb N | --lib …]
-register <name> <技能目录>      # 自动创建 .nodekb 库根
+register <name> <技能目录>      # 自动创建 .nodekb 库根 + 初始化内嵌 git
 list [--json]
+vcs init|status|commit [--msg …] [--kb N | --lib …]   # 版本控制
 webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 ```
 
@@ -78,9 +79,9 @@ webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 ## 5. MCP 通用化
 
 - 只配置一个 nodekb 本体 MCP（stdio），目标库通过 `kb`（注册名）选择。
-- 四工具：`kb_list` / `kb_read` / `kb_search` / `kb_diag`（无 edit——写文档 = 原生 write/edit）。
+- 六工具：`kb_list` / `kb_read` / `kb_search` / `kb_diag` / `kb_vcs_init` / `kb_vcs_status`（无 edit——写文档 = 原生 write/edit）。
 - 注册表：`nodekb/kb_registry.json`（name → 技能目录），`kb register` 维护。
-- Agent 典型流程：`kb_list` → `kb_search(kb=库名, query)` → `kb_read(kb=库名, target=tid)`；**写 = 改 `.nodekb` 下 md**。
+- Agent 典型流程：`kb_list` → `kb_search(kb=库名, query)` → `kb_read(kb=库名, target=tid)`；**写 = 改 `.nodekb` 下 md**，下次读取自动快照（见 §7）。
 
 ## 6. WebUI（人类只读界面）
 
@@ -98,15 +99,23 @@ webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 | `/api/toc` | `kb, tid` | `{"tid", "lines": [目录行]}`（tid 缺省 root） |
 | `/api/read` | `kb, tid, node` | `{"tid", "title", "type", "source", "text"}`（渲染文本，node=1 仅单节点） |
 | `/api/raw` | `kb, tid` | `{"tid", "type", "title", "parent_tid", "sort", "source", "content"}` |
-| `/api/search` | `kb, q, type, limit` | `{"count", "hits": [{tid, type, title, source, snippet}]}` |
+| `/api/search` | `kb, q, type, limit, offset` | `{"total", "count", "offset", "hits"}`（hit: tid 稳定句柄/ref/positional/type/title/source/snippet） |
 
-## 7. 存储位置
+## 7. 版本控制（内嵌 git，自动快照）
+
+- 仓库根 = `.nodekb/` 自身（只版本化知识库，不碰技能目录其它文件）；`.git` 等点目录解析时跳过。
+- 初始化：`register` 自动；既有库 `kb vcs init` / MCP `kb_vcs_init` 一次即可。
+- 自动快照：每次解析库后若仓库有变更即 `commit`（`autosnap: N 处变更`），零手动操作；线程锁防并发（WebUI）。
+- 手动：`vcs status`（repo/last_commit/dirty/kinds）、`vcs commit --msg`。
+- git 缺失或非仓库：全部静默跳过，只读功能不受影响。
+
+## 8. 存储位置
 
 - 库 = 技能文件夹下 `.nodekb/`，md 递归组织（任意目录结构）。
 - 技能目录原 doc/ 等保留为备份（迁移时复制，不删除）。
-- 版本历史由编辑工具链承担，NodeKB 不持有。
+- 版本历史由 `.nodekb` 内嵌 git 仓库承担（自动快照，见 §7）。
 
-## 8. 验证清单（回归门禁）
+## 9. 验证清单（回归门禁）
 
 - [x] `.nodekb` 递归解析：文件夹/文件/隐式段/显式 `<node>` 四级。
 - [x] 缺省规则：type=文件夹名；parent=文件内第一个 `<node>` name，否则文件节点。
@@ -120,5 +129,6 @@ webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 - [x] 显式节点转译不连带兄弟 / 节点内重复行 lint 回归测试通过；minecraft `index:entry` 渲染 13.2k→8.9k 字符（-33%），§4 gradlew 4→1、Copy-Item 3→1。
 - [x] 位置型 TID 引用 / 内容漂移 / 循环源行号 / 前缀歧义候选 回归测试通过。
 - [x] search 稳定句柄实测：`kb_search reconcile` 首条 tid=`index:entry`（非位置型），ref=`index:entry:6`，positional 标记，片段保留换行；`kb_read fact:mod` 列候选 fact:mod-dir/modid/modid-places/modid-trap。
-- [x] MCP 四工具交互正常；重复 TID 报错。
+- [x] MCP 六工具交互正常；重复 TID 报错。
+- [x] vcs：register 自动 init；改动后读取自动快照（`autosnap: N 处变更`）实测；`.git` 点目录不污染节点树；三库（minecraft/comfyui/filmmeasure）已初始化并含初始快照。
 - [x] WebUI：/api/list·tree·toc·read·raw·search 全接口实测通过（minecraft 库，339 节点），引用展开正常；markdown 渲染（表格/任务清单/嵌套列表/引用递归）实测通过。

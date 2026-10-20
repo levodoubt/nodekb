@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from . import mdlib, parse, render
+from . import mdlib, parse, render, vcs
 
 # ---------------------------------------------------------------- 库注册表
 
@@ -36,10 +36,11 @@ def save_registry(reg: dict) -> None:
 
 
 def register_db(name: str, lib_dir: str) -> dict:
-    """注册一个库。技能目录下自动创建 .nodekb 作为库根。"""
+    """注册一个库。技能目录下自动创建 .nodekb 作为库根，并自动初始化内嵌 git 仓库。"""
     base = Path(lib_dir).resolve()
     nodekb = base / ".nodekb"
     nodekb.mkdir(parents=True, exist_ok=True)
+    vcs.init(str(nodekb))  # 版本控制：自动初始化（git 缺失时静默跳过）
     reg = load_registry()
     reg[name] = {"path": str(base)}
     save_registry(reg)
@@ -79,8 +80,27 @@ def load_library(
     lib: Optional[str] = None,
     problems: Optional[list] = None,
 ) -> dict[str, dict]:
-    """解析 .nodekb 库为节点映射。problems 传入列表时：重复 TID 降级跳过并记录。"""
-    return mdlib.parse_library(lib_dir_of(kb, lib), problems)
+    """解析 .nodekb 库为节点映射。problems 传入列表时：重复 TID 降级跳过并记录。
+
+    解析成功后触发自动快照：若 .nodekb 已初始化内嵌 git 仓库且有变更则自动 commit。
+    """
+    nodekb = lib_dir_of(kb, lib)
+    nodes = mdlib.parse_library(nodekb, problems)
+    vcs.maybe_autosnap(nodekb)
+    return nodes
+
+
+# ---------------------------------------------------------------- vcs
+
+def cmd_vcs(kb: Optional[str], lib: Optional[str], action: str, msg: Optional[str] = None) -> tuple[str, int]:
+    nodekb = lib_dir_of(kb, lib)
+    if action == "init":
+        return vcs.init(nodekb), 0
+    if action == "status":
+        return json.dumps(vcs.status(nodekb), ensure_ascii=False, indent=2), 0
+    if action == "commit":
+        return vcs.commit(nodekb, msg or "kb commit"), 0
+    return f"未知 vcs 动作: {action}", 2
 
 
 # ---------------------------------------------------------------- read
