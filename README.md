@@ -2,7 +2,7 @@
 
 **Your Markdown files are the database.** NodeKB turns a directory of Markdown into an addressable node graph: no database, no sync step, no duplicated state. It exposes a small `read / search / diag` surface for agents (MCP) and humans (CLI + a zero-dependency local WebUI).
 
-> English | [中文说明](README_CN.md)
+> English | [简体中文](README_CN.md)
 
 ---
 
