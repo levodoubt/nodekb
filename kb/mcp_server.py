@@ -36,6 +36,8 @@ def _tools() -> list[dict]:
                     "node": {"type": "boolean"},
                     "toc": {"type": "boolean", "description": "目录视图（tid·标题·字符数，列子树用）"},
                     "raw": {"type": "boolean", "description": "节点元信息（含 source 行号）"},
+                    "maxlen": {"type": "integer", "default": 50000,
+                               "description": "整支渲染字符上限（0=不限；超限报错并提示缩小范围，防止打爆上下文）"},
                     "kb": {"type": "string", "description": "库注册名，如 filmmeasure"},
                 },
                 "required": ["target"],
@@ -100,6 +102,7 @@ def _call_tool(params: dict) -> dict:
             text, code = commands.cmd_read(
                 nodes, args["target"], node=args.get("node", False),
                 raw=args.get("raw", False), toc=args.get("toc", False),
+                maxlen=args.get("maxlen", commands.DEFAULT_MAXLEN),
             )
         elif name == "kb_search":
             text, code = commands.cmd_search(
@@ -107,7 +110,9 @@ def _call_tool(params: dict) -> dict:
                 as_json=True,
             )
         elif name == "kb_diag":
-            text, code = commands.cmd_diag(nodes)
+            problems: list = []
+            nodes = commands.load_library(args.get("kb"), None, problems)
+            text, code = commands.cmd_diag(nodes, problems)
         else:
             return {"result": {"content": [{"type": "text", "text": f"未知工具: {name}"}], "isError": True}}
         return {"result": {"content": [{"type": "text", "text": text}], "isError": code != 0}}

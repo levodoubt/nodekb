@@ -139,5 +139,100 @@ class TestCommands(unittest.TestCase):
         self.assertEqual(reg["t"]["path"], str(tmp.resolve()))
 
 
+class TestFixes(unittest.TestCase):
+    """反馈修复回归（A 组正确性 / B5 护栏 / C7 降级 / D13 候选 / E16-17 内容校验）。"""
+
+    def test_fence_not_split(self):  # A1
+        tmp = make_lib({"01.md": "# F\n\n```bash\n## not a heading\nls\n```\n\n## Real\n正文\n"})
+        nodes = parse(tmp)
+        self.assertNotIn("doc:01:not a heading", nodes)  # 围栏内 ## 不切分
+        self.assertIn("doc:01:1", nodes)  # 真正的 H2 段（title=Real）
+        self.assertEqual(nodes["doc:01:1"]["title"], "Real")
+        self.assertIn("## not a heading\nls", nodes["doc:01"]["content"])  # 围栏块完整保留
+        self.assertIn("```bash", nodes["doc:01"]["content"])
+
+    def test_bom_stripped(self):  # A2
+        tmp = make_lib({"01.md": "\ufeff# 真标题\n\n正文\n"})
+        nodes = parse(tmp)
+        self.assertEqual(nodes["doc:01"]["title"], "真标题")  # BOM 不吞 H1
+        self.assertNotIn("\ufeff", nodes["doc:01"]["content"])
+
+    def test_container_transclusion_renders_children(self):  # A3
+        tmp = make_lib({"02.md": "## Alpha\n\nAAA\n\n## Beta\n\nBBB\n"})
+        nodekb = Path(tmp) / ".nodekb" / "doc"
+        (nodekb / "entry.md").write_text("# 入口\n\n[[doc:02]]\n", encoding="utf-8")
+        nodes = parse(tmp)
+        text = render.render_node(nodes, "doc:entry")
+        self.assertIn("AAA", text)
+        self.assertIn("BBB", text)
+        self.assertNotIn("[[doc:02]]", text)
+
+    def test_mixed_structure_transclusion(self):  # A4
+        tmp = make_lib({"01.md": "# Mix\n\n<node name=\"mix:root\">根</node>\n\n## Section\n分节\n"})
+        nodekb = Path(tmp) / ".nodekb" / "doc"
+        (nodekb / "entry.md").write_text("# 入口\n\n[[doc:01]]\n", encoding="utf-8")
+        nodes = parse(tmp)
+        text = render.render_node(nodes, "doc:entry")
+        self.assertIn("分节", text)  # 文件节点转译应含子节（不再因 content 为空而空白）
+
+    def test_read_maxlen_guard(self):  # B5
+        body = "\n\n".join(f"## 1.{i}\n\n{'正文' * 30}" for i in range(1, 41))
+        tmp = make_lib({"01.md": "# 大\n\n" + body + "\n"})
+        nodes = parse(tmp)
+        text, code = commands.cmd_read(nodes, "doc:01", maxlen=1000)
+        self.assertEqual(code, 2)
+        self.assertIn("渲染超上限", text)
+        text, code = commands.cmd_read(nodes, "doc:01", maxlen=0)
+        self.assertEqual(code, 0)
+        self.assertIn("## 1.1", text)
+
+    def test_duplicate_degrade_with_problems(self):  # C7
+        tmp = make_lib({"01.md": "<node name=\"x\">1</node>\n", "02.md": "<node name=\"x\">2</node>\n"})
+        probs = []
+        nodes = commands.load_library(lib=str(tmp), problems=probs)
+        self.assertEqual(nodes["x"]["content"], "1")  # 首见者生效
+        self.assertTrue(any("重复 TID: x" in p for p in probs))
+        out, code = commands.cmd_diag(nodes, probs)
+        self.assertEqual(code, 2)
+        self.assertIn("重复 TID: x", out)
+
+    def test_ambiguous_prefix_lists_candidates(self):  # D13
+        def n(tid):
+            return {"tid": tid, "title": tid, "type": "doc", "parent_tid": "root",
+                    "sort": 0.0, "content": "", "source": "x.md#L1"}
+        nodes = {t: n(t) for t in ("root", "a:1", "a:2", "b:1")}
+        text, code = commands.cmd_read(nodes, "a", maxlen=0)  # 前缀同时命中 a:1 / a:2
+        self.assertEqual(code, 2)
+        self.assertIn("候选", text)
+        self.assertIn("a:1", text)
+        self.assertIn("a:2", text)
+
+    def test_diag_positional_ref(self):  # E16
+        tmp = make_lib({"01.md": "## 3.1\n\n见 [[doc:01:3.1]]。\n"})
+        nodes = parse(tmp)
+        out, code = commands.cmd_diag(nodes)
+        self.assertEqual(code, 2)
+        self.assertIn("位置型 TID 引用", out)
+
+    def test_diag_duplicate_blocks(self):  # E17
+        blk = "这是完全相同的长文本块用于漂移检测，必须超过四十个字符才会被记录并上报，请勿删改。"
+        tmp = make_lib({"01.md": "## 1\n\n" + blk + "\n", "02.md": "## 2\n\n" + blk + "\n"})
+        nodes = parse(tmp)
+        out, code = commands.cmd_diag(nodes)
+        self.assertEqual(code, 2)
+        self.assertIn("内容重复", out)
+
+    def test_cycle_error_has_source(self):  # C8
+        tmp = make_lib({"a.md": "<node name=\"a\">见 [[b]]</node>\n", "b.md": "<node name=\"b\">见 [[a]]</node>\n"})
+        nodes = parse(tmp)
+        with self.assertRaises(render.TransclusionError) as ctx:
+            render.render_node(nodes, "a")
+        self.assertIn("循环引用", str(ctx.exception))
+        self.assertIn(".md", str(ctx.exception))  # 带源文件
+        out, code = commands.cmd_diag(nodes)
+        self.assertEqual(code, 2)
+        self.assertIn("循环引用", out)
+
+
 if __name__ == "__main__":
     unittest.main()

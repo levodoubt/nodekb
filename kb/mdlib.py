@@ -46,13 +46,19 @@ def _new_node(tid, title, type_, parent, sort, source, content=None) -> dict:
 
 def parse_file(path: Path, file_tid: str, folder_type: str, parent_tid: str) -> list[dict]:
     """解析单个 md 文件为节点列表（文件节点 + 隐式 H2 段 + 显式 <node>，按物理行序）。"""
-    text = path.read_text(encoding="utf-8", errors="replace")
+    text = path.read_text(encoding="utf-8", errors="replace").lstrip("\ufeff")  # 剥 BOM
     lines = text.splitlines()
     rel = path.as_posix()
 
     h1: Optional[str] = None
     h1_line = 0
+    fenced = False
     for lineno, line in enumerate(lines, start=1):
+        if line.strip().startswith("```"):  # 围栏内的 # 不当作标题
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
         m = H1_RE.match(line)
         if m:
             h1 = m.group(1).strip()
@@ -68,12 +74,23 @@ def parse_file(path: Path, file_tid: str, folder_type: str, parent_tid: str) -> 
     sec_node: Optional[dict] = None
     sec_index = 0
     stack: list[dict] = []  # 显式 <node> 嵌套栈
+    fenced = False  # ``` 围栏内一律视为原文，不做任何标记解析
 
     def default_parent() -> str:
         return first_node_tid if first_node_tid else file_tid
 
+    def content_target() -> dict:
+        return stack[-1] if stack else (sec_node or file_node)
+
     for lineno, line in enumerate(lines, start=1):
         if lineno == h1_line:
+            continue
+        if line.strip().startswith("```"):  # 围栏开关：连围栏行一起进内容
+            fenced = not fenced
+            content_target()["content"].append(line)
+            continue
+        if fenced:  # 围栏内：`##`/`<node>`/H1 全部按原文
+            content_target()["content"].append(line)
             continue
         if stack:
             if line.strip() == "</node>":
@@ -137,14 +154,23 @@ def _folder_tid(rel_parts: tuple[str, ...]) -> str:
     return ":".join(parse.slugify(p) for p in rel_parts)
 
 
-def parse_library(lib_dir: str) -> dict[str, dict]:
-    """解析 `.nodekb/` 库为节点映射。递归：文件夹 → 节点，md → 文件节点 + 内容节点。"""
+def parse_library(lib_dir: str, problems: Optional[list] = None) -> dict[str, dict]:
+    """解析 `.nodekb/` 库为节点映射。递归：文件夹 → 节点，md → 文件节点 + 内容节点。
+
+    problems 传列表时：重复 TID 降级为「跳过冲突项 + 记录问题」，其余照读；
+    problems 为 None（默认）时重复 TID 直接抛 ValueError（fail-fast）。
+    """
     root = Path(lib_dir)
     if not root.is_dir():
         raise ValueError(f"库目录不存在: {lib_dir}")
     nodes: dict[str, dict] = {
         ROOT_TID: _new_node(ROOT_TID, ".nodekb", "root", None, 0.0, "", content=""),
     }
+
+    def duplicate(tid: str, what: str) -> None:
+        if problems is None:
+            raise ValueError(f"重复 TID: {tid}（{what} 与现有节点冲突）")
+        problems.append(f"重复 TID: {tid}（{what} 冲突，已跳过）")
 
     for dirpath, dirnames, filenames in os.walk(root):
         d = Path(dirpath)
@@ -154,7 +180,8 @@ def parse_library(lib_dir: str) -> dict[str, dict]:
         parent_tid = _folder_tid(rel[:-1])
         if folder_tid != ROOT_TID:
             if folder_tid in nodes:
-                raise ValueError(f"重复 TID: {folder_tid}（文件夹冲突）")
+                duplicate(folder_tid, f"文件夹 {d}")
+                continue
             nodes[folder_tid] = _new_node(folder_tid, rel[-1], folder_type, parent_tid,
                                           float(len(rel)), "", content="")
         for name in sorted(filenames):
@@ -165,7 +192,8 @@ def parse_library(lib_dir: str) -> dict[str, dict]:
                 else parse.slugify(Path(name).stem)
             for node in parse_file(md, file_tid, folder_type, folder_tid):
                 if node["tid"] in nodes:
-                    raise ValueError(f"重复 TID: {node['tid']}（{md.name} 与现有节点冲突）")
+                    duplicate(node["tid"], md.name)
+                    continue
                 nodes[node["tid"]] = node
     return nodes
 

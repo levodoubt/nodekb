@@ -53,24 +53,41 @@ def unregister_db(name: str) -> None:
 
 
 def lib_dir_of(kb: Optional[str], lib: Optional[str]) -> str:
-    """定位库根：lib（技能目录或 .nodekb 路径）优先，否则注册表 kb 名。返回 .nodekb 目录。"""
+    """定位库根：lib（技能目录或 .nodekb 路径）优先，否则注册表 kb 名。返回 .nodekb 目录。
+
+    lib 传入技能目录或 .nodekb 路径均可；找不到时报错同时给出原参数，避免被拼接路径误导。
+    """
     if lib:
         p = Path(lib)
-        return str(p if p.name == ".nodekb" else p / ".nodekb")
+        nodekb = str(p if p.name == ".nodekb" else p / ".nodekb")
+        if not os.path.isdir(nodekb):
+            raise ValueError(f"库目录不存在: {nodekb}（你传入: {lib}）")
+        return nodekb
     if kb:
         info = load_registry().get(kb) or {}
         if not info:
             raise KeyError(f"未注册的库: {kb}（用 kb register <名称> <技能目录>）")
-        return str(Path(info["path"]) / ".nodekb")
+        nodekb = str(Path(info["path"]) / ".nodekb")
+        if not os.path.isdir(nodekb):
+            raise ValueError(f"库目录不存在: {nodekb}（注册表 {kb} 指向 {info.get('path')}）")
+        return nodekb
     raise ValueError("未指定库：用 --kb <注册名> 或 --lib <技能目录/.nodekb>")
 
 
-def load_library(kb: Optional[str] = None, lib: Optional[str] = None) -> dict[str, dict]:
-    """解析 .nodekb 库为节点映射。"""
-    return mdlib.parse_library(lib_dir_of(kb, lib))
+def load_library(
+    kb: Optional[str] = None,
+    lib: Optional[str] = None,
+    problems: Optional[list] = None,
+) -> dict[str, dict]:
+    """解析 .nodekb 库为节点映射。problems 传入列表时：重复 TID 降级跳过并记录。"""
+    return mdlib.parse_library(lib_dir_of(kb, lib), problems)
 
 
 # ---------------------------------------------------------------- read
+
+# 整支渲染字符上限（0 = 不限）。防止一次调用打爆上下文（root ≈ 23.5 万字符）。
+DEFAULT_MAXLEN = 50000
+
 
 def cmd_read(
     nodes: dict[str, dict],
@@ -79,11 +96,16 @@ def cmd_read(
     raw: bool = False,
     as_json: bool = False,
     toc: bool = False,
+    maxlen: int = 0,
 ) -> tuple[str, int]:
     try:
         tid = render.resolve_path(nodes, target)
         if tid is None:
-            return f"未找到节点: {target}", 2
+            cands = sorted(t for t in nodes if t.startswith(target + ":"))[:10]
+            msg = f"未找到节点: {target}"
+            if cands:
+                msg += "；候选: " + "、".join(cands)
+            return msg, 2
         if toc:
             out = "\n".join(render.toc_lines(nodes, tid))
         elif raw:
@@ -92,6 +114,9 @@ def cmd_read(
             out = render.render_node(nodes, tid)
         else:
             out = render.render_subtree(nodes, tid)
+            if maxlen and len(out) > maxlen:  # 大小护栏：只对整支渲染生效
+                return (f"渲染超上限: {len(out)} 字符 > {maxlen}。"
+                        f"建议 --node 单节点或指定小节 tid；如确实需要整支，用 --maxlen 0 强制全量。"), 2
         if as_json and not raw and not toc:
             out = json.dumps({"tid": tid, "text": out}, ensure_ascii=False, indent=2)
         return out, 0
@@ -200,12 +225,35 @@ def cmd_search(
 
 # ---------------------------------------------------------------- diag
 
-def cmd_diag(nodes: dict[str, dict]) -> tuple[str, int]:
-    problems: list[str] = []
+_POSITIONAL_SEG = re.compile(r"^\d+(\.\d+)*$")
+_DUP_MIN_LEN = 40  # 视为漂移候选的文本块最短长度
+
+
+def _dup_blocks(nodes: dict[str, dict]) -> list[str]:
+    """内容漂移：物理重复的文本块（同一段文字出现在 2+ 节点，且不是转译引用）。"""
+    by_block: dict[str, list[str]] = {}
+    for n in nodes.values():
+        for blk in re.split(r"\n\s*\n", n["content"]):
+            b = " ".join(blk.split())
+            if len(b) >= _DUP_MIN_LEN:
+                by_block.setdefault(b, []).append(n["tid"])
+    out = []
+    for b, tids in by_block.items():
+        uniq = sorted(set(tids))
+        if len(uniq) >= 2:  # 跨节点漂移；单节点内部重复不报
+            out.append(f"内容重复（可能漂移）: {', '.join(uniq)} 共有块「{b[:60]}{'…' if len(b) > 60 else ''}」")
+    return out[:20]
+
+
+def cmd_diag(nodes: dict[str, dict], problems: Optional[list] = None) -> tuple[str, int]:
+    problems = list(problems or [])
     for node in nodes.values():
         for ref_tid in parse.extract_refs(node["content"]):
             if ref_tid not in nodes:
                 problems.append(f"悬空引用: {node['tid']} → [[{ref_tid}]]")
+            elif len(ref_tid.split(":")) >= 3 and _POSITIONAL_SEG.match(ref_tid.split(":")[-1]):
+                # 位置型段落 TID（文件:序号）：插章节就漂移，禁止作为引用目标
+                problems.append(f"位置型 TID 引用（插章节会漂移）: {node['tid']} → [[{ref_tid}]]")
     for tid in nodes:
         try:
             render.render_node(nodes, tid)
@@ -215,6 +263,7 @@ def cmd_diag(nodes: dict[str, dict]) -> tuple[str, int]:
         if node["parent_tid"] is not None and node["parent_tid"] not in nodes:
             problems.append(f"孤儿节点: {node['tid']} (父 {node['parent_tid']} 不存在)")
     _detect_tree_cycles(nodes, problems)
+    problems.extend(_dup_blocks(nodes))
     code = 2 if problems else 0
     report = {
         "exit_code": code,

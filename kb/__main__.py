@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from typing import Optional
 
 from . import commands
 
@@ -23,6 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--toc", action="store_true", help="目录视图（tid·标题·字符数）")
     p.add_argument("--raw", action="store_true", help="节点元信息（含 source 行号）")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--maxlen", type=int, default=commands.DEFAULT_MAXLEN,
+                   help="整支渲染字符上限（0=不限；超限报错并提示缩小范围）")
     p.add_argument("--kb", default=None, help="库注册名（kb list 查看）")
     p.add_argument("--lib", default=None, help="技能目录或 .nodekb 路径")
 
@@ -57,11 +60,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _load(args) -> dict:
-    return commands.load_library(getattr(args, "kb", None), getattr(args, "lib", None))
+def _load(args, problems: Optional[list] = None) -> dict:
+    return commands.load_library(getattr(args, "kb", None), getattr(args, "lib", None), problems)
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows 控制台默认 CP936，中文会乱码：强制 UTF-8 输出
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     args = build_parser().parse_args(argv)
     try:
         if args.command == "register":
@@ -84,15 +92,17 @@ def main(argv: list[str] | None = None) -> int:
             from . import webui
 
             return webui.main(host=args.host, port=args.port)
-        nodes = _load(args)
+        problems: list = []
+        nodes = _load(args, problems)
         if args.command == "read":
             text, code = commands.cmd_read(nodes, args.target, node=args.node,
-                                           raw=args.raw, as_json=args.json, toc=args.toc)
+                                           raw=args.raw, as_json=args.json, toc=args.toc,
+                                           maxlen=args.maxlen)
         elif args.command == "search":
             text, code = commands.cmd_search(nodes, args.query, type_=args.type,
                                              limit=args.limit, as_json=args.json)
         elif args.command == "diag":
-            text, code = commands.cmd_diag(nodes)
+            text, code = commands.cmd_diag(nodes, problems)
         elif args.command == "dump":
             text, code = commands.cmd_dump(nodes, args.out)
         else:

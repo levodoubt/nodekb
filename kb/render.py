@@ -17,6 +17,41 @@ class TransclusionError(Exception):
     pass
 
 
+def _children(nodes: dict[str, dict], tid: str) -> list[dict]:
+    return sorted(
+        (n for n in nodes.values() if n["parent_tid"] == tid),
+        key=lambda n: (n["sort"], n["tid"]),
+    )
+
+
+def _has_children(nodes: dict[str, dict], tid: str) -> bool:
+    return any(n["parent_tid"] == tid for n in nodes.values())
+
+
+def _cycle_msg(seen: list[str], target: str, nodes: dict[str, dict]) -> str:
+    msg = "循环引用: " + " -> ".join(seen + [target])
+    node = nodes.get(target)
+    if node and node.get("source"):
+        msg += f"（重复节点源: {node['source']}）"
+    return msg
+
+
+def _project_container(nodes: dict[str, dict], tid: str, seen: list[str]) -> str:
+    """容器节点（文件夹/文件）转译：整支子树投影（`## 标题` + 内容 + 子节递归）。
+
+    seen 已含本 tid（由调用方标记访问），环检测在 _expand 层完成。
+    """
+    node = nodes[tid]
+    parts = []
+    title = node["title"] or tid
+    if title != tid:  # 显式节点（title==tid）内联时不输出 `## tid` 标题，避免列表内噪音
+        parts.append("## " + title)
+    parts.append(_expand(node["content"], nodes, seen))
+    for child in _children(nodes, tid):
+        parts.append(_project_container(nodes, child["tid"], seen + [child["tid"]]))
+    return "\n\n".join(parts)
+
+
 def _expand(text: str, nodes: dict[str, dict], seen: list[str]) -> str:
     out: list[str] = []
     pos = 0
@@ -24,10 +59,13 @@ def _expand(text: str, nodes: dict[str, dict], seen: list[str]) -> str:
         out.append(text[pos : m.start()])
         target = m.group(1)
         if target in seen:
-            raise TransclusionError("循环引用: " + " -> ".join(seen + [target]))
+            raise TransclusionError(_cycle_msg(seen, target, nodes))
         nxt = seen + [target]
         if target in nodes:
-            out.append(_expand(nodes[target]["content"], nodes, nxt))
+            if _has_children(nodes, target):
+                out.append(_project_container(nodes, target, nxt))
+            else:
+                out.append(_expand(nodes[target]["content"], nodes, nxt))
         else:
             out.append(m.group(0))  # 悬空：保留原文，diag 报告
         pos = m.end()
@@ -77,13 +115,6 @@ def node_info(nodes: dict[str, dict], tid: str) -> dict:
         "parent_tid": node["parent_tid"], "sort": node["sort"],
         "source": node["source"], "content": node["content"],
     }
-
-
-def _children(nodes: dict[str, dict], tid: str) -> list[dict]:
-    return sorted(
-        (n for n in nodes.values() if n["parent_tid"] == tid),
-        key=lambda n: (n["sort"], n["tid"]),
-    )
 
 
 def resolve_path(nodes: dict[str, dict], path: str) -> Optional[str]:
