@@ -45,7 +45,7 @@ def _tools() -> list[dict]:
         },
         {
             "name": "kb_search",
-            "description": "全文 / TID / 标题检索（中文自然语言可用，2-gram 拆分 + 命中加权）。返回渲染上下文片段。目标库：kb 或 srcs。",
+            "description": "全文 / TID / 标题检索（中文自然语言可用，2-gram 拆分 + 命中加权）。返回渲染上下文片段。命中 tid=稳定句柄（位置型段落已上溯到文件/显式节点，可直接用于 kb_read），ref=实际命中节点（可能是位置型 TID，仅用于定位）。目标库：kb 或 srcs。",
             "inputSchema": {
                 "type": "object",
                 "properties": {

@@ -112,6 +112,9 @@ def cmd_read(
             out = json.dumps(render.node_info(nodes, tid), ensure_ascii=False, indent=2)
         elif node:
             out = render.render_node(nodes, tid)
+            kids = [c for c in nodes.values() if c["parent_tid"] == tid]
+            if kids:  # 反直觉提示：带 ## 子节的页面 --node 只回前言
+                out += f"\n\n（本节点含 {len(kids)} 个子节：正文在子节里；看结构用 --toc，看整支不传 --node）"
         else:
             out = render.render_subtree(nodes, tid)
             if maxlen and len(out) > maxlen:  # 大小护栏：只对整支渲染生效
