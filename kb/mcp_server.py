@@ -39,7 +39,7 @@ def _tools() -> list[dict]:
                     "raw": {"type": "boolean", "description": "节点元信息（含 source 行号）"},
                     "maxlen": {"type": "integer", "default": 50000,
                                "description": "整支渲染字符上限（0=不限；超限报错并提示缩小范围，防止打爆上下文）"},
-                    "kb": {"type": "string", "description": "库注册名，如 filmmeasure"},
+                    "kb": {"type": "string", "description": "库注册名（kb_list 可查看，如 mykb）"},
                 },
                 "required": ["target"],
             },

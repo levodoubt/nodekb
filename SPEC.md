@@ -1,4 +1,4 @@
-# NodeKB —— 节点化项目知识库 接口设计（SPEC v0.3，.nodekb 递归）
+# NodeKB —— 节点化项目知识库 接口设计（SPEC v0.3.0，.nodekb 递归）
 
 ## 1. 目标与定位
 
@@ -133,10 +133,10 @@ webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 - [x] 引用文件/文件夹展开整支子树（`[[文件TID]]` 不再丢 `##` 小节）；显式 `<node>` 原子引用只展开自身（kind 规则，不连带同文件兄弟）。
 - [x] read 整支 / --toc / --raw / --maxlen（超限报错、0=不限）；search 中文多词；dump 导出。
 - [x] 围栏内 `##` 不切分、BOM 剥除；重复 TID 降级（problems 收集）实测。
-- [x] diag 结构 + 内容级实测（comfyui 508 / minecraft 342 / filmmeasure 154 节点）：minecraft 0 错误；漂移/节点内重复实测检出模板类与整段拷贝。
-- [x] 显式节点转译不连带兄弟 / 节点内重复行 lint 回归测试通过；minecraft `index:entry` 渲染 13.2k→8.9k 字符（-33%），§4 gradlew 4→1、Copy-Item 3→1。
+- [x] diag 结构 + 内容级实测（三个真实库，508 / 342 / 154 节点）：结构 0 错误；漂移/节点内重复实测检出模板类与整段拷贝。
+- [x] 显式节点转译不连带兄弟 / 节点内重复行 lint 回归测试通过；真实库入口页渲染 13.2k→8.9k 字符（-33%），重复命令块 4→1、3→1。
 - [x] 位置型 TID 引用 / 内容漂移 / 循环源行号 / 前缀歧义候选 回归测试通过。
-- [x] search 稳定句柄实测：`kb_search reconcile` 首条 tid=`index:entry`（非位置型），ref=`index:entry:6`，positional 标记，片段保留换行；`kb_read fact:mod` 列候选 fact:mod-dir/modid/modid-places/modid-trap。
+- [x] search 稳定句柄实测：命中 `tid` 为文件/锚点节点（非位置型），`ref` 为位置型小节，`positional` 标记，片段保留换行；裸前缀查询（如 `fact:mod`）列出候选。
 - [x] MCP 六工具交互正常；重复 TID 报错。
-- [x] vcs：register 自动 init；改动后读取自动快照（`autosnap: N 处变更`）实测；`.git` 点目录不污染节点树；三库（minecraft/comfyui/filmmeasure）已初始化并含初始快照。
-- [x] WebUI：/api/list·graph·tree·toc·read·raw·search 全接口实测通过；树状图（父左子右/确定性布局/折叠徽标/chip 筛选/详情面板/间距与线明度滑杆/两种适配）浏览器实测通过（comfyui 583 节点：s=0.3 可读、筛选后 519、横向间距生效）。
+- [x] vcs：register 自动 init；改动后读取自动快照（`autosnap: N 处变更`）实测；`.git` 点目录不污染节点树；三个真实库已初始化并含初始快照。
+- [x] WebUI：/api/list·graph·tree·toc·read·raw·search 全接口实测通过；树状图（父左子右/确定性布局/折叠/类型标注/chip 筛选/详情面板/间距与线明度滑杆/两种适配）浏览器实测通过。

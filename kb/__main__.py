@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("register", help="注册一个库（name → 技能目录；自动创建 .nodekb 库根）")
     p.add_argument("name")
-    p.add_argument("lib_dir", help="技能目录，如 F:\\ComfyUI\\.dsh\\skills\\about-comfyui")
+    p.add_argument("lib_dir", help="技能目录，如 /path/to/skill-dir（其下需有或自动创建 .nodekb）")
 
     p = sub.add_parser("list", help="列出已注册的库")
     p.add_argument("--json", action="store_true")

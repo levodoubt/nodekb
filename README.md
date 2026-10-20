@@ -1,106 +1,153 @@
-# NodeKB —— 节点化项目知识库（md 即库）
+# NodeKB — Markdown-native, node-based knowledge base
 
-**md 文件即资料库，节点是 md 中以标记标定的文本块。** NodeKB 是纯解析/渲染层（零持久化状态），为 Agent（MCP）与人类（dump/WebUI）提供 `read / search / diag` 检索接口。
+**Your Markdown files are the database.** NodeKB turns a directory of Markdown into an addressable node graph: no database, no sync step, no duplicated state. It exposes a small `read / search / diag` surface for agents (MCP) and humans (CLI + a zero-dependency local WebUI).
 
-## 设计基线
+[中文说明](README_CN.md)
 
-- **库根 = 技能文件夹下 `.nodekb/`**，递归解析其内全部 md——任意目录结构、任意嵌套、自定义类型天然支持。
-- **写 = 直接写 `.nodekb` 下的 md**；无 edit 命令；版本/回滚由编辑工具链的文件追踪承担。
-- **所有文本皆节点**：显式 `<node>` 段 + 隐式 `##` H2 段统一成节点。
-- **单一真源天然成立**：无第二存储、无同步、无单点故障。
+---
 
-## 节点模型
+## Why
+
+When project memory grows past a single file, agents end up reading whole documents to find one value — and values get copy-pasted until they drift apart. NodeKB keeps the text in Markdown only, gives every block a stable address (`TID`), and renders references on demand:
+
+- **Bounded reads** — read one node, one subtree, or one section instead of a 200 KB document.
+- **Single source of truth** — a fact lives in exactly one node; other pages *transclude* it with `[[TID]]`.
+- **Verifiable structure** — `diag` reports dangling references, cycles, duplicate IDs and content drift before they bite.
+
+## Design baseline
+
+- **Library root = `.nodekb/` inside a skill folder**; every Markdown file below it is parsed recursively — arbitrary directory layouts and custom types work out of the box.
+- **Writing = editing Markdown**; there is no `edit` command. History is handled by an embedded git repo.
+- **Every piece of text is a node**: explicit `<node>` blocks and implicit `##` sections are first-class.
+- **Zero third-party dependencies** (`http.server`, `subprocess`, `re`, `json` only).
+
+## Requirements
+
+- Python **3.10+**
+- `git` on `PATH` (optional — version control silently degrades to read-only if missing)
+
+## Quick start
+
+```bash
+# Register a library (creates <skill-dir>/.nodekb and initializes embedded git)
+python -m kb register mykb /path/to/skill-dir
+
+# Read a node, a subtree, a table of contents, or raw metadata
+python -m kb read root            --kb mykb
+python -m kb read index:entry     --kb mykb --node
+python -m kb read doc             --kb mykb --toc
+python -m kb read fact:modid      --kb mykb --raw
+
+# Search (natural language works; CJK is indexed with 2-grams)
+python -m kb search "proxy port"  --kb mykb --json
+
+# Self-check
+python -m kb diag                 --kb mykb
+```
+
+`--lib <skill-dir | .nodekb>` works anywhere `--kb <name>` does, for one-off libraries.
+
+## Node model
 
 ```
-.nodekb/                     ← 库根（tid=root）
-├── doc/                     ← 文件夹节点（type=doc，parent=root）
-│   ├── 01.md                ← 文件节点（tid=doc:01，parent=doc）
-│   │   ├── <node name="a">  ← 第一个 <node> = 文件根（parent=文件节点）
-│   │   │   └── <node name="b">   ← b.parent 缺省 = a（文件根）
-│   │   └── ## 概述           ← 隐式段（parent 缺省 = 文件根）
-├── ModelInfo/               ← 自定义文件夹（type=modelinfo）
+.nodekb/                     ← library root (tid = root)
+├── doc/                     ← folder node   (type=doc, parent=root)
+│   ├── 01.md                ← file node     (tid=doc:01, parent=doc)
+│   │   ├── <node name="a">  ← first <node> = file root (parent = file node)
+│   │   │   └── <node name="b">  ← b.parent defaults to a
+│   │   └── ## Overview      ← implicit section (parent defaults to file root)
+└── ModelInfo/               ← custom folder → type=modelinfo
 ```
 
-**缺省规则**：`type` 缺省 = 所在文件夹名；`parent` 缺省 = 文件内第一个 `<node>` 段的 name，否则文件节点。
+**Defaults**: `type` falls back to the folder name; `parent` falls back to the first `<node>` in the file, otherwise the file node. Section IDs prefer an explicit number (`## 3.1` → `:3.1`) and otherwise use an ordinal.
 
-**引用（transclusion）**：`[[TID]]` 引用任意节点，read 时展开；环检测报错；悬空引用保留原文 + diag 报告。物理唯一、逻辑多态——文本只存一处，投影出现在所有引用处。
+**Transclusion**: `[[TID]]` inlines any node when rendering. Referencing a **file/folder** expands its whole subtree; referencing an explicit `<node>` inlines only that atom. Cycles raise an error with the source location; dangling references are kept verbatim and reported by `diag`.
 
-## 命令
+## CLI
 
 ```
-python -m kb read <tid> [--node] [--toc] [--raw] [--json] [--kb N | --lib 技能目录]
-python -m kb search <query> [--type T] [--limit N] [--json] [--kb N | --lib …]
-python -m kb diag [--kb N | --lib …]
-python -m kb dump --out <dir> [--kb N | --lib …]
-python -m kb register <name> <技能目录>    # 自动创建 .nodekb 库根 + 初始化内嵌 git
-python -m kb list
-python -m kb vcs init|status|commit [--msg …] [--kb N | --lib …]   # 版本控制
-python -m kb webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
+read   <tid> [--node] [--toc] [--raw] [--json] [--maxlen N] [--kb NAME | --lib PATH]
+search <query> [--type T] [--limit N] [--offset N] [--snippet N] [--json] [--kb …]
+diag   [--strict] [--kb …]
+dump   --out <dir> [--kb …]
+register <name> <skill-dir>
+list   [--json]
+vcs    init|status|commit [--msg TEXT] [--kb …]
+webui  [--host 127.0.0.1] [--port 8666]
 ```
 
-- `read`：默认整支渲染投影（引用展开）；`--toc` 目录视图；`--raw` 元信息（含 source 行号）；`--maxlen` 整支字符上限（默认 50000，超限报错提示缩小范围，`0`=不限）。引用**文件/文件夹**节点时展开整支子树（`##` 小节不再丢失）；引用**显式 `<node>`** 只展开该原子节点自身（同文件兄弟不连带展开）。
-- `search`：自建 2-gram 倒排（实时），中文自然语言可用，多词加权，LIKE 兜底。`--offset` 分页续读、`--snippet` 片段窗口；命中 `tid` 为**稳定句柄**（位置型段落上溯到文件/显式节点），`ref` 为实际命中节点、`positional` 标记；片段保留换行/缩进（代码块不压平）。
-- `diag`：悬空/循环引用（带源行号）、孤儿节点、树环、重复 TID、位置型 TID 引用、内容漂移（跨节点物理重复块）、节点内重复行（正文/命令行整段拷贝）。
+- **read** — renders the subtree with references expanded. `--maxlen` (default 50000) guards against blowing up an agent's context; `0` disables the guard.
+- **search** — live 2-gram inverted index with multi-term weighting and a LIKE fallback. Hits return a **stable `tid`** (positional section IDs are lifted to their file/anchor node), the actual `ref`, a `positional` flag, and a snippet that preserves newlines and indentation.
+- **diag** — structural errors (dangling / positional references, cycles, orphans, duplicate IDs) fail with exit code 2; drift warnings (cross-node duplicate blocks, duplicated lines within a node) are reported separately and only fail under `--strict`. Boilerplate such as navigation lines, link-only blocks and parameter lists is ignored; per-library exemptions go in `.nodekb/diag_ignore.json`.
 
-## MCP（Agent 接入）
+## MCP (agent integration)
 
-只配置一个本体 MCP（stdio），目标库通过 `kb` 注册名选择：
+Run one stdio MCP server for all libraries; pick a target library with `kb`:
 
 ```json
 {
   "mcpServers": {
     "nodekb": {
-      "command": "D:\\software\\Python\\3.13.14\\python.exe",
-      "args": ["D:\\desktop\\1\\1\\nodekb\\run_mcp.py"],
+      "command": "python",
+      "args": ["/absolute/path/to/nodekb/run_mcp.py"],
       "env": { "PYTHONIOENCODING": "utf-8" }
     }
   }
 }
 ```
 
-六工具：`kb_list` / `kb_read` / `kb_search` / `kb_diag` / `kb_vcs_init` / `kb_vcs_status`（无 edit——写文档 = 原生 write/edit）。Agent 典型流程：`kb_list` → `kb_search(kb=库名, query)` → `kb_read(kb=库名, target=tid)`；改动自动快照见下。
+Tools: `kb_list`, `kb_read`, `kb_search`, `kb_diag`, `kb_vcs_init`, `kb_vcs_status`. There is no write tool — edits are made with the agent's native file tools and picked up on the next read.
 
-## 版本控制（内嵌 git，自动快照）
+Typical flow: `kb_list` → `kb_search(kb=…, query=…)` → `kb_read(kb=…, target=…)`.
 
-- **仓库根 = `.nodekb/` 自身**：只版本化知识库，不碰技能目录其它文件；`.git` 目录解析时自动跳过。
-- **初始化**：`kb register` 自动完成；既有库执行一次 `kb vcs init`（或 MCP `kb_vcs_init`）即可。
-- **自动快照**：每次读取/检索/自检后，若仓库有变更则自动 `commit`（消息 `autosnap: N 处变更`）——Agent 改完 md，下一次读取即落盘，无需手动 git。
-- **手动**：`kb vcs status`（最近提交/待提交变更）、`kb vcs commit --msg …`（有意义的提交信息）。
-- git 缺失时全部静默跳过，只读功能不受影响。既有库（minecraft/comfyui/filmmeasure）已初始化。
+## Embedded version control
 
-## WebUI（人类只读界面 · 树状图）
+- The repository root is the `.nodekb/` directory itself — only knowledge is versioned, never the surrounding skill folder.
+- `kb register` initializes it automatically; existing libraries need one `kb vcs init`.
+- **Auto-snapshot**: after every parse (read/search/diag/WebUI), pending changes are committed as `autosnap: N change(s)`. No manual git required.
+- `kb vcs status` shows the last commit and pending changes; `kb vcs commit --msg …` records a meaningful message.
+- Missing `git`, or a directory that is not a repository, is a silent no-op.
 
-`python -m kb webui` 启动纯只读本地 server（stdlib http.server，零依赖，单 HTML 内联 CSS/JS 零 CDN）。浏览器打开 http://127.0.0.1:8666/：
+## WebUI
 
-- **树状图**（暗色）：**父左子右**的确定性树布局（同步计算，不依赖动画回调）；节点 = 方形文本框（深色底 + 类型色描边，显示 `name`，上限 50 字符）；父→子为曲线，`[[TID]]` 引用线在悬停/选中时以虚线显示
-- **折叠**：默认全部展开；双击节点可折叠/展开其子分支，折叠时左上角标注显示 `类型 ＋N`；类型 chip 筛选时自动跳过被隐藏的分支
-- **节点标注**：类型色描边只画外框，框外左上角以小字标注 `类型 · 子分支数`
-- **左侧栏**：类型筛选 chip + 层级树（点击直达节点并居中）+ 视图调节（横向间距 / 纵向间距 / 线明度滑杆，「重新适配」可读优先、「全部适配」全貌优先）；窄屏（<900px）自动收窄
-- **点击节点**：右侧滑出详情面板（渲染 markdown，引用已展开；整支/仅节点/元信息按钮）
-- **交互**：滚轮缩放（文本随缩放同步变化）、拖空白平移；Esc 关闭面板
-- **全文检索**：顶部输入，结果列表点击直达节点并居中
-- **只读**：无任何编辑入口——改文档 = 直接改 `.nodekb` 下的 md
+```bash
+python -m kb webui          # http://127.0.0.1:8666/
+```
 
-只读接口（JSON）：`/api/list` `/api/graph?kb=`（节点+parent/ref 边） `/api/tree?kb=` `/api/toc?kb=&tid=` `/api/read?kb=&tid=&node=` `/api/raw?kb=&tid=` `/api/search?kb=&q=&type=&limit=&offset=`。
+A read-only, single-page UI with inline CSS/JS (no CDN, works offline):
 
-## 文档
+- **Left-to-right tree** (parents left, children right) computed deterministically — no animation callbacks involved.
+- Boxed nodes: dark fill, type-colored outline, node `name` inside (up to 50 characters).
+- Outside each box, top-left: a small label with `type · child count` (or `type ＋N` when collapsed).
+- **Sidebar**: type chips to filter, a collapsible hierarchy tree for navigation, and view controls (horizontal gap, vertical gap, edge brightness, *Fit readable* / *Fit all*).
+- **Click** a node for a right-side panel with rendered Markdown (references expanded; whole-subtree / node-only / raw metadata). Clicking never moves the canvas; double-click collapses or expands a branch.
+- Wheel to zoom (labels scale too), drag empty space to pan, `Esc` closes the panel.
 
-- [SPEC.md](SPEC.md)：完整接口设计（v0.3，.nodekb 递归）
-- [tests/test_core.py](tests/test_core.py)：14 项回归测试，`python -m unittest discover -s tests`
+JSON endpoints: `/api/list`, `/api/graph`, `/api/tree`, `/api/toc`, `/api/read`, `/api/raw`, `/api/search`.
 
-## 布局
+## Layout
 
 ```
 nodekb/
-├── README.md / SPEC.md
+├── README.md / README_CN.md / SPEC.md
 ├── kb/
-│   ├── __main__.py     CLI（read/search/diag/…/webui）
-│   ├── mdlib.py        解析层（.nodekb 递归 → 节点树）
-│   ├── render.py       渲染（引用展开 / toc / raw）
+│   ├── __main__.py     CLI entry point
+│   ├── mdlib.py        parser (.nodekb recursion → node tree)
+│   ├── render.py       rendering (transclusion / toc / raw)
 │   ├── commands.py     read / search / diag / register / list / dump
-│   ├── mcp_server.py   MCP server（stdio，零依赖）
-│   ├── webui.py        只读本地 WebUI（http.server 零依赖）
-│   ├── vcs.py          .nodekb 内嵌 git（自动快照，零依赖）
-│   └── run_mcp.py      独立启动入口（不依赖 PYTHONPATH/cwd）
-└── tests/test_core.py
+│   ├── mcp_server.py   MCP server (stdio, zero dependencies)
+│   ├── webui.py        read-only WebUI (http.server, zero dependencies)
+│   └── vcs.py          embedded git auto-snapshots
+├── run_mcp.py          standalone MCP entry point (no PYTHONPATH/cwd needed)
+└── tests/test_core.py  36 regression tests
 ```
+
+## Tests
+
+```bash
+python -m unittest discover -s tests
+```
+
+## License
+
+No license file is included yet. Add one before redistributing or accepting contributions.
