@@ -357,8 +357,12 @@ function layout(){
 }
 function resize(){
   const dpr = window.devicePixelRatio || 1;
-  const w = VW(), h = VH();
-  cv.width = w * dpr; cv.height = h * dpr;
+  const rect = cv.getBoundingClientRect();
+  const w = Math.max(1, rect.width), h = Math.max(1, rect.height);
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  /* 关键：显式固定 CSS 显示尺寸 = w×h，否则 canvas 的 CSS 宽度退化由 width 属性（w×dpr）决定，
+     导致绘制/命中基准（clientWidth）与显示尺寸错位 → 光标点击位置映射错误 */
+  cv.style.width = w + 'px'; cv.style.height = h + 'px';
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 window.addEventListener('resize', () => { resize(); if (GRAPH) draw(); });
@@ -694,6 +698,7 @@ async function loadLib(){
   HIDDEN = new Set(); SEL = null; COLLAPSED = new Set(); EXPANDED = new Set();
   buildFilters();
   loadTree();
+  resize();          /* 布局前刷新基准，保证 VIEW/命中与显示一致 */
   layout();
   draw();
 }
