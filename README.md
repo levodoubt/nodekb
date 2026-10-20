@@ -68,17 +68,18 @@ python -m kb webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 - **手动**：`kb vcs status`（最近提交/待提交变更）、`kb vcs commit --msg …`（有意义的提交信息）。
 - git 缺失时全部静默跳过，只读功能不受影响。既有库（minecraft/comfyui/filmmeasure）已初始化。
 
-## WebUI（人类只读界面）
+## WebUI（人类只读界面 · 星图）
 
 `python -m kb webui` 启动纯只读本地 server（stdlib http.server，零依赖，单 HTML 内联 CSS/JS 零 CDN）。浏览器打开 http://127.0.0.1:8666/：
 
-- **库选择**：顶部下拉（读 `kb_registry.json`，仅列出存在 `.nodekb` 的库）
-- **左栏项目树**：全库导航（文件夹/文件/显式节点递归，懒展开），类型过滤可只看 doc/todo/git/… 
-- **全文检索**：复用 search（中文 2-gram），结果点击直达节点
-- **阅读视图**：`[[TID]]` 引用已展开；「仅此节点 / 元信息」按钮；来源行号展示；markdown 渲染（标题/表格/任务清单/嵌套列表/引用/代码块/图片/删除线）
+- **关系星图**（暗色、Obsidian 风格）：节点 = 知识块（仅显示 name），边 = 父子层级（弱线）+ `[[TID]]` 转译引用（高亮线）；力导向布局（网格斥力 + 弹簧，力/速度/坐标钳制防发散）
+- **类型着色 + 快捷筛选**：不同 type 不同颜色（doc/facts/git/handover/index/lessons/todo…），顶部彩色 chip 点击即隐藏/显示该类节点
+- **点击节点**：右侧滑出详情面板（渲染 markdown，引用已展开；整支/仅节点/元信息按钮）
+- **交互**：滚轮缩放、拖空白平移、拖节点调整、悬停高亮邻接；Esc 关闭面板
+- **全文检索**：顶部输入，结果列表点击直达节点并居中
 - **只读**：无任何编辑入口——改文档 = 直接改 `.nodekb` 下的 md
 
-只读接口（JSON）：`/api/list` `/api/tree?kb=` `/api/toc?kb=&tid=` `/api/read?kb=&tid=&node=` `/api/raw?kb=&tid=` `/api/search?kb=&q=&type=&limit=`。
+只读接口（JSON）：`/api/list` `/api/graph?kb=`（节点+parent/ref 边） `/api/tree?kb=` `/api/toc?kb=&tid=` `/api/read?kb=&tid=&node=` `/api/raw?kb=&tid=` `/api/search?kb=&q=&type=&limit=&offset=`。
 
 ## 文档
 

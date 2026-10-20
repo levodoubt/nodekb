@@ -83,11 +83,13 @@ webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 - 注册表：`nodekb/kb_registry.json`（name → 技能目录），`kb register` 维护。
 - Agent 典型流程：`kb_list` → `kb_search(kb=库名, query)` → `kb_read(kb=库名, target=tid)`；**写 = 改 `.nodekb` 下 md**，下次读取自动快照（见 §7）。
 
-## 6. WebUI（人类只读界面）
+## 6. WebUI（人类只读界面 · 星图）
 
 `python -m kb webui`：纯只读本地 HTTP server（stdlib http.server，零依赖；单 HTML 内联 CSS/JS 零 CDN）。仅绑 127.0.0.1，默认端口 8666。
 
-- 库选择（仅列出存在 `.nodekb` 的注册库）→ 左栏项目树（全库递归，懒展开 + 类型过滤）→ 全文检索 → 阅读视图（`[[TID]]` 已展开）。
+- **关系星图**（暗色）：节点 = 知识块（仅 name），边 = parent 层级 + `[[TID]]` ref 引用；力导向布局（网格斥力 + 弹簧，力/速度/坐标钳制防 500+ 节点发散）。
+- **类型着色 + chip 筛选**：type→固定色板（hash 兜底）；点击 chip 隐藏/显示该类。
+- **点击节点 → 右侧详情面板**（markdown 渲染，引用展开；整支/仅节点/元信息）；滚轮缩放、平移、拖节点、悬停高亮、Esc 关闭。
 - 无任何编辑入口；改文档 = 直接改 `.nodekb` 下的 md。
 
 只读接口（JSON，错误统一 `{"error": …}`）：
@@ -95,6 +97,7 @@ webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 | 路由 | 参数 | 返回 |
 |---|---|---|
 | `/api/list` | – | `{"libraries": {name: 技能目录}}` |
+| `/api/graph` | `kb` | `{"nodes": [{tid,title,type,kind,nchar}], "edges": [{s,t,r: p|r}]}`（r=p 父链 / r=ref 转译引用） |
 | `/api/tree` | `kb` | `{"tree": 递归树, "total": N}`（每节点 tid/title/type/source/children） |
 | `/api/toc` | `kb, tid` | `{"tid", "lines": [目录行]}`（tid 缺省 root） |
 | `/api/read` | `kb, tid, node` | `{"tid", "title", "type", "source", "text"}`（渲染文本，node=1 仅单节点） |
@@ -131,4 +134,4 @@ webui [--host 127.0.0.1] [--port 8666]   # 只读本地 WebUI
 - [x] search 稳定句柄实测：`kb_search reconcile` 首条 tid=`index:entry`（非位置型），ref=`index:entry:6`，positional 标记，片段保留换行；`kb_read fact:mod` 列候选 fact:mod-dir/modid/modid-places/modid-trap。
 - [x] MCP 六工具交互正常；重复 TID 报错。
 - [x] vcs：register 自动 init；改动后读取自动快照（`autosnap: N 处变更`）实测；`.git` 点目录不污染节点树；三库（minecraft/comfyui/filmmeasure）已初始化并含初始快照。
-- [x] WebUI：/api/list·tree·toc·read·raw·search 全接口实测通过（minecraft 库，339 节点），引用展开正常；markdown 渲染（表格/任务清单/嵌套列表/引用递归）实测通过。
+- [x] WebUI：/api/list·graph·tree·toc·read·raw·search 全接口实测通过；星图（暗色/力导向/类型着色/chip 筛选/点击详情/缩放平移）浏览器实测 5 项全过（comfyui 583 节点坐标有界 ≤410）。
